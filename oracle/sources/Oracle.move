@@ -77,14 +77,14 @@ module 0x1::Oracle {
     //     }
     // }
 
-    // public fun receiveValidate(ctx: &mut tx_context::TxContext, prop: Proposal) {
-    //     // add proposal to relevant query
-    //     // if (query.numProposals == hyperparameter):
-    //         // calculate odds
-    //         let num_favor = 0;
-    //         // iterate through
-    //         // call function
-    //         // TODO later: calculate payouts
-    // }
+    public fun receiveValidate(ctx: &mut tx_context::TxContext, prop: Proposal) {
+        // add proposal to relevant query
+        // if (query.numProposals == hyperparameter):
+            // calculate odds
+            let num_favor = 0;
+            // iterate through
+            // call function
+            // TODO later: calculate payouts
+    }
 
 }
