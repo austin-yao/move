@@ -1,13 +1,15 @@
 module 0x1::BetInstantiation {
-    use sui::coin::{Coin, Self};
+    use sui::coin;
     use sui::tx_context::TxContext;
-    use sui::object::{Self, ID, UID};
-    use sui::sui::SUI;
-    use sui::random;
-    use sui::time;
-    use sui::address;
+    use sui::object::{ID, UID, Self};
+    use std::time::Time;
+    use std::address;
     use std::vector;
     use std::string::String;
+    use sui::sui::SUI;
+    use sui::transfer;
+
+    const DATA_ADDR : address = @0x1;
 
     public struct LockedFunds has key {
         id: UID,
@@ -45,137 +47,33 @@ module 0x1::BetInstantiation {
         is_active: bool
     }
 
-    public struct Proposal has store, key {
-        id: UID,
-        proposer: address,
-        oracleId: u64,
-        question: String,
-        // 0 or  1
-        response: bool,
-    }
-
-    public struct Query has store, key {
-        id: UID,
-        // p1: address,
-        // p2: address,
-        betId: u64,
-        question: String, 
-        validators: vector<Proposal>
-    }
-
-    public struct AllQueries has key {
-        id: UID,
-        queries: vector<Proposal>,
-    }
-
-    // AUSTIN FUNCTIONS
-    public fun receiveQuery(betId: u64, question: String, ctx: &mut tx_context::TxContext): Query acquires AllQueries {
-        // access the vector of queries
-        let new_query = Query {
-            id: object::new(ctx),
-            betId: betId,
-            question: question,
-            validators: vector::empty<Proposal>(),
-        };
-        let all_queries = borrow_global_mut<AllQueries>(0x1);
-        vector::push_back(&mut all_queries.queries, new_query);
-        // add it to the vector of queries
-        new_query
-    }
-
-    public fun requestValidate(ctx: &mut tx_context::TxContext, coin: Coin<SUI>, r: & random::Random): Proposal acquires AllQueries{
-        let generator = random::new_generator(r, ctx);
-        // get size of the vector
-        let all_queries = borrow_global_mut<AllQueries>(0x1);
-        // TODO: change this to generate a vector in size
-        let size = vector::length(all_queries.queries);
-        let index = random::generate_u32_in_range(&mut generator, 1, size);
-        
-        // need to rewrite and look at copy
-        while (vector::contains(&((vector::borrow(&all_queries.queries, index)).validators), &(tx_context::sender(ctx)))) {
-            index = random::generate_u32_in_range(&mut generator, 1, size);
-        };
-            // get query
-        let query = ((vector::borrow(&all_queries.queries, index)).validators);
-        Proposal {
-            id: object::new(ctx),
-            proposer: tx_context::sender(ctx),
-            oracleId: query.betId,
-            question: query.question,
-            response: false,
-        }
-    }
-
-    public fun receiveValidate(ctx: &mut tx_context::TxContext, prop: Proposal) acquires AllQueries {
-        // add proposal to relevant query
-        let all_queries = borrow_global_mut<AllQueries>(0x1);
-        let len = vector::length(&all_queries);
-        let mut index: u64 = 0;
-
-        while (index < len) {
-            if (vector::borrow(&all_queries.queries, index).betId == prop.oracleId) {
-                break;
-            };
-            index = index + 1;
-        }
-
-        if (index == len) {
-            return;
-        }
-
-        let query = vector::borrow(&all_queries.queries, index);
-
-        vector::push_back(&query.validators, prop);
-
-        if (vector::length(&query.validators) == 10) {
-            // calculate odds
-            let mut num_favor: u64 = 0;
-            let numProposals = vector::length(&query.validators);
-            index = 0;
-            while (index < query.numProposals) {
-                let proposal = vector::borrow(&query.validators, index);
-                if (proposal.response) {
-                    num_favor = num_favor + 1;
-                }
-                index = index + 1;
-            }
-            if (num_favor > 5) {
-                process_oracle_answer(query.betId, true);
-            } else {
-                process_oracle_answer(query.betId, false);
-            }
-            // TODO later: calculate payouts
-        }
-    }
-    // AUSTIN END
-
     //initialize the module, which only one address can before no others are able to 
     public fun initialize_contract(ctx: &mut TxContext) {
         //check if initialization already occured
         assert!(!exists<InitializationCap>(0x1), 503); 
 
-        let all_queries = AllQueries { proposals: vector::empty::<Query>()};
-        move_to(0x1, all_queries);
-
         // initialize AllBets
-        let all_bets = AllBets { bets: vector::empty::<Bet>() };
-        move_to(0x1, all_bets);
+        let all_bets = AllBets { id: object::new(ctx), bets: vector[] };
+        transfer::transfer(all_bets, DATA_ADDR);
 
         // initialize ApprovedUsers
-        let approved_users = ApprovedUsers { users: vector::empty::<address>() };
-        move_to(0x1, approved_users);
+        let approved_users = ApprovedUsers { id: object::new(ctx), users: vector[] };
+        transfer::transfer(approved_users, DATA_ADDR);
 
-        let creator_address = TxContext::sender(ctx);
+        let creator_address = tx_context::sender(ctx);
         //Store initialization cap at 0x1
         let init_cap = InitializationCap {
-            creator_address
+            id: object::new(ctx), 
+            instantiator: creator_address
         };
-        move_to(0x1, init_cap); 
+        transfer::transfer(init_cap, DATA_ADDR); 
 
-        let coin = Coin::mint(0);
+        coin::TreasuryCap<SUI>
+        let coin = coin::mint(0);
         //initialize locked funds
         let locked_funds = LockedFunds {
-            coin,
+            id: object::new(ctx),
+            funds: coin,
         };
         move_to(0x1, locked_funds)
     }
@@ -185,11 +83,12 @@ module 0x1::BetInstantiation {
         question: String, amount: u64,
         odds: u64, side_of_creator: String,
         game_start_time: u64, game_end_time: u64
-    ) acquires AllBets {
-        let creator_address = TxContext::sender(ctx);
-        let transaction_id = TxContext::id(ctx);
-        let amount_staked = Coin::withdraw(ctx, amount);
+    ) {
+        let creator_address = tx_context::sender(ctx);
+        let transaction_id = tx_context::id(ctx);
+        let amount_staked = coin::withdraw(ctx, amount);
         let new_bet = Bet {
+            id: object::new(ctx),
             creator_address,
             consenting_address,
             question,
@@ -199,13 +98,14 @@ module 0x1::BetInstantiation {
             agreed_by_both: false, // Initially false until second party agrees
             game_start_time,
             game_end_time,
-            is_active: true // Bet is active but not yet agreed upon
+            is_active: true, // Bet is active but not yet agreed upon
             //we assume side of creator is whatever the String bet's phrase is
             //example: bet String descriptions should 
             //be phrased as "Eagles will win vs. the Seahawks today", then creator has side 'Eagles win'
+            side_of_creator: true
         };
         
-        let all_bets = borrow_global_mut<AllBets>(0x1);
+        let all_bets = transfer::borrow_mut<AllBets>(0x1);
         vector::push_back(&mut all_bets.bets, new_bet);
     }
 
@@ -214,19 +114,21 @@ module 0x1::BetInstantiation {
         let all_bets = borrow_global_mut<AllBets>(0x1);
         let index = find_bet_index(&all_bets.bets, transaction_id);
 
-        assert!(vector::is_valid_index(&all_bets.bets, index), 404);
-        let bet = vector::borrow(&all_bets.bets, index);
-        assert!(bet.creator_address == TxContext::sender(ctx), 403);
+        // let (val, _) = vector::index_of<Bet>(&all_bets.bets, index);
+        assert!(index > vector::length<Bet>(all_bets), 404);
+        let bet = vector::borrow<Bet>(&all_bets.bets, index);
+        assert!(bet.creator_address == ctx.sender(), 403);
         assert!(!bet.agreed_by_both, 400);
 
         let locked_funds = borrow_global_mut<LockedFunds>(0x1);
 
         // Withdraw staked amount from locked funds
         let payout = Coin::withdraw(&mut locked_funds.funds, bet.amount_staked.value());
-        Coin::deposit(TxContext::sender(ctx), payout);
+        Coin::deposit(ctx.sender(), payout);
 
         // Remove bet
-        vector::remove(&mut all_bets.bets, index);
+        let b = vector::remove<Bet>(&mut all_bets.bets, index);
+        
     }
 
     //second player in instantiated bet agrees to it here
@@ -236,8 +138,8 @@ module 0x1::BetInstantiation {
         let all_bets = borrow_global_mut<AllBets>(0x1);
         let index = find_bet_index(&all_bets.bets, transaction_id);
 
-        assert!(vector::is_valid_index(&all_bets.bets, index), 404);
-        let bet = vector::borrow(&all_bets.bets, index);
+        assert!(Vector::is_valid_index(&all_bets.bets, index), 404);
+        let bet = Vector::borrow(&all_bets.bets, index);
 
         //caller is consenting address and bet is not already agreed to
         assert!(bet.consenting_address == TxContext::sender(ctx), 403); // 403: Forbidden, not consenting address
@@ -258,14 +160,14 @@ module 0x1::BetInstantiation {
         let mut all_bets = get_all_bets(); 
         
         // Check if the bet exists
-        assert!(vector::is_valid_index(&all_bets, index), 404);
+        assert!(Vector::is_valid_index(&all_bets, index), 404);
 
-        let bet = vector::borrow_mut(&mut all_bets, index);
+        let bet = Vector::borrow_mut(&mut all_bets, index);
         // if time past end time and no agreement, remove this bet
         if (current_time >= bet.game_end_time && !bet.agreed_by_both) {
             Coin::deposit(bet.creator_address, bet.amount_staked);
             bet.is_active = false;
-            vector::remove(&mut all_bets, index);
+            Vector::remove(&mut all_bets, index);
         }
     }
 
@@ -273,9 +175,9 @@ module 0x1::BetInstantiation {
     public fun send_bet_to_oracle(ctx: &mut TxContext, bet_id: ID) {
         let all_bets = borrow_global<AllBets>(0x1);
         let index = find_bet_index(&all_bets.bets, bet_id);
-        assert!(vector::is_valid_index(&all_bets.bets, index), 404);
+        assert!(Vector::is_valid_index(&all_bets.bets, index), 404);
 
-        let bet = vector::borrow(&all_bets.bets, index);
+        let bet = Vector::borrow(&all_bets.bets, index);
         let current_time = Time::now_microseconds();
 
         //Only correct creator/second party can call this, and after bet end time
@@ -294,7 +196,7 @@ module 0x1::BetInstantiation {
 
         let bet = vector::borrow_mut(&all_bets.bets, index);
 
-        let winner_address = if oracle_answer { bet.creator_address } else { bet.consenting_address };
+        let winner_address = if (oracle_answer) { bet.creator_address } else { bet.consenting_address };
 
         let payout_amount = bet.amount_staked.value();
         let winning_funds = Coin::mint(payout_amount);
@@ -320,7 +222,7 @@ module 0x1::BetInstantiation {
 
     // Initializes the AllBets resource and publishes it under account.
     public fun initialize_bets_storage(ctx: &mut TxContext) {
-        let bets = AllBets { bets: vector::empty<Bet>() };
-        move_to(&mut ctx, bets);
+        let bets = AllBets {id: object::new(ctx), bets: vector[]};
+        transfer::transfer(bets, ctx.sender());
     }
 }
