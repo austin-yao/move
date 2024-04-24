@@ -2,7 +2,7 @@
 //     use sui::coin::{Coin, Self};
 //     use sui::tx_context::TxContext;
 //     use sui::object::{ID, UID, Self};
-//     use std::time::Time;
+//     use sui::clock::{Self, Clock};
 //     use std::address;
 //     use std::vector;
 //     use std::string::String;
@@ -14,7 +14,7 @@
 
 //     const EInsufficientBalance: u64 = 10;
 //     const EInvalidPlayerBetAmount: u64 = 11;
-
+    
 //     public struct LockedFunds has key {
 //         id: UID,
 //         funds: Balance<SUI>,
@@ -45,7 +45,8 @@
 //         transaction_id: ID,
 //         odds: u64,
 //         agreed_by_both: bool,
-//         side_of_creator: bool, // "true" or "false", specifies in question which side is represented by "true"
+//         //the side of the creator is the affirmative of whateevr the bet states 
+//         //(ex: Eagles win vs Seahawks then bet creator is on the Eagles win side)
 //         game_start_time: u64,
 //         game_end_time: u64,
 //         is_active: bool
@@ -85,11 +86,11 @@
 //     //create a new Bet object
 //     public fun create_bet(ctx: &mut TxContext, consenting_address: address,
 //         question: String, amount: u64,
-//         odds: u64, side_of_creator: String,
+//         odds: u64, 
 //         game_start_time: u64, game_end_time: u64, user_bet: Coin<SUI>,
 //     ) {
 //         let creator_address = tx_context::sender(ctx);
-//         let transaction_id = tx_context::fresh_object_address(ctx).to_id();
+//         let transaction_id = tx_context::fresh_object_address(ctx).to_id;
 
 //         assert!(coin::value(&user_bet) == amount, EInvalidPlayerBetAmount);
 //         let amount_staked = coin::into_balance(user_bet);
@@ -108,7 +109,6 @@
 //             //we assume side of creator is whatever the String bet's phrase is
 //             //example: bet String descriptions should 
 //             //be phrased as "Eagles will win vs. the Seahawks today", then creator has side 'Eagles win'
-//             side_of_creator: true
 //         };
         
 //         let all_bets = transfer::borrow_mut<AllBets>(0x1);
@@ -121,7 +121,6 @@
 //         let index = find_bet_index(&all_bets.bets, transaction_id);
 
 //         // let (val, _) = vector::index_of<Bet>(&all_bets.bets, index);
-//         assert!(index > vector::length<Bet>(all_bets), 404);
 //         let bet = vector::borrow<Bet>(&all_bets.bets, index);
 //         assert!(bet.creator_address == ctx.sender(), 403);
 //         assert!(!bet.agreed_by_both, 400);
@@ -138,14 +137,14 @@
 //     }
 
 //     //second player in instantiated bet agrees to it here
-//     public fun agree_to_bet(ctx: &mut TxContext, transaction_id: ID) acquires Bet, LockedFunds {
-//         let current_time = Time::now_microseconds();
+//     public fun agree_to_bet(ctx: &mut TxContext, clock: &Clock, transaction_id: ID) acquires Bet, LockedFunds {
+//         let current_time = clock::timestamp_ms(clock);
 
 //         let all_bets = borrow_global_mut<AllBets>(0x1);
 //         let index = find_bet_index(&all_bets.bets, transaction_id);
 
-//         assert!(Vector::is_valid_index(&all_bets.bets, index), 404);
-//         let bet = Vector::borrow(&all_bets.bets, index);
+//         assert!(vector::is_valid_index(&all_bets.bets, index), 404);
+//         let bet = vector::borrow(&all_bets.bets, index);
 
 //         //caller is consenting address and bet is not already agreed to
 //         assert!(bet.consenting_address == TxContext::sender(ctx), 403); // 403: Forbidden, not consenting address
@@ -160,15 +159,15 @@
 //     }
 
 //     // handle expiration of a bet agreement window
-//     public fun handle_expired_bet(ctx: &mut TxContext, transaction_id: ID) acquires Bet {
-//         let current_time = Time::now_microseconds();
+//     public fun handle_expired_bet(ctx: &mut TxContext, clock: &Clock, transaction_id: ID) acquires Bet {
+//         let current_time = clock::timestamp_ms(clock);
 //         let index = find_bet_index(transaction_id); 
 //         let mut all_bets = get_all_bets(); 
         
 //         // Check if the bet exists
-//         assert!(Vector::is_valid_index(&all_bets, index), 404);
+//         assert!(vector::is_valid_index(&all_bets, index), 404);
 
-//         let bet = Vector::borrow_mut(&mut all_bets, index);
+//         let bet = vector::borrow_mut(&mut all_bets, index);
 //         // if time past end time and no agreement, remove this bet
 //         if (current_time >= bet.game_end_time && !bet.agreed_by_both) {
 //             let payout_amount = bet.amount_staked.value();
@@ -177,18 +176,18 @@
 //             let payout = coin::take<SUI>(&mut locked_funds.funds, bet.amount_staked.value(), ctx);
 //             transfer::public_transfer(payout, bet.creator_address);
 //             bet.is_active = false;
-//             Vector::remove(&mut all_bets, index);
+//             vector::remove(&mut all_bets, index);
 //         }
 //     }
 
 //     //after game end time, send bet to oracle for winner verification
-//     public fun send_bet_to_oracle(ctx: &mut TxContext, bet_id: ID) {
+//     public fun send_bet_to_oracle(ctx: &mut TxContext, clock: &Clock, bet_id: ID) {
 //         let all_bets = borrow_global<AllBets>(0x1);
 //         let index = find_bet_index(&all_bets.bets, bet_id);
 //         assert!(index >= vector::length<Bet>(all_bets.bets), 404);
 
 //         let bet = vector::borrow<Bet>(&all_bets.bets, index);
-//         let current_time = Time::now_microseconds();
+//         let current_time = clock::timestamp_ms(clock);
 
 //         //Only correct creator/second party can call this, and after bet end time
 //         assert!((ctx.sender() == bet.creator_address || ctx.sender() == bet.consenting_address) &&
