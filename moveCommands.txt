@@ -1,0 +1,3 @@
+move build
+move sandbox publish -v
+move sandbox run sources/test_script.move

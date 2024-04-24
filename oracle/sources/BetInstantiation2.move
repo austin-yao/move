@@ -69,7 +69,7 @@ module 0x1::BetInstantiation2 {
         oracleId: ID,
         question: String,
         // 0 or  1
-        response: bool,
+        response: bool
     }
 
     public struct Query has store {
@@ -120,6 +120,7 @@ module 0x1::BetInstantiation2 {
     }
 
     public fun requestValidate(ctx: &mut tx_context::TxContext, game_data: &mut GameData, coin: Coin<SUI>, r: & random::Random): Proposal{
+        assert!(coin::value(&coin) == 10, EInvalidPlayerBetAmount);
         let generator = random::new_generator(r, ctx);
         // get size of the vector
         let all_queries = &mut game_data.queries;
@@ -152,6 +153,9 @@ module 0x1::BetInstantiation2 {
         };
             // get query
         let query = ((vector::borrow(all_queries, index as u64)));
+        let amount_staked = coin::into_balance(coin);
+        // adding the stake to the game balance
+        balance::join(&mut game_data.funds, amount_staked);
         Proposal {
             id: object::new(ctx),
             proposer: tx_context::sender(ctx),
@@ -187,6 +191,7 @@ module 0x1::BetInstantiation2 {
             let mut num_favor: u64 = 0;
             let numProposals = vector::length(&query.validators);
             index = 0;
+
             while (index < numProposals) {
                 let proposal = vector::borrow(&query.validators, index);
                 if (proposal.response) {
@@ -194,12 +199,36 @@ module 0x1::BetInstantiation2 {
                 };
                 index = index + 1;
             };
+            
+            let wrong_answers = 0;
+            if (num_favor > 5) {
+                wrong_answers = numProposals - num_favor;
+            } else {
+                wrong_answers = num_favor;
+            };
+            let right_answers = numProposals - wrong_answers;
+
+            let amount_earned = 10 + (wrong_answers * 10) / right_answers;
+
+            // doing the payouts
+            index = 0;
+            while (index < numProposals) {
+                let proposal = vector::borrow(&query.validators, index);
+                // wrong_answer
+                if ((proposal.response && num_favor <= 5) || (!proposal.response && num_favor > 5)) {
+                    let locked_funds = &mut game_data.funds;
+                    let payout = coin::take<SUI>(locked_funds, amount_earned, ctx);
+                    transfer::public_transfer(payout, proposal.proposer);
+                }
+            };
+
             if (num_favor > 5) {
                 process_oracle_answer(ctx, game_data, query.betId, true);
             } else {
                 process_oracle_answer(ctx, game_data, query.betId, false);
             };
-            // TODO later: calculate payouts
+            
+            // TODO: check for time expiry
         }
     }
 
