@@ -211,6 +211,7 @@ module 0x1::BetInstantiation2 {
         assert!(tx_context::sender(ctx) == game_data.owner, ECallerNotInstantiator);
         assert!(coin::value(&user_bet) == amount, EInsufficientBalance);
         let amount_staked = coin::into_balance(user_bet);
+        balance::join(&mut game_data.funds, copy amount_staked);
         let new_bet = Bet {
             id: object::new(ctx),
             creator_address,
@@ -229,7 +230,6 @@ module 0x1::BetInstantiation2 {
         };
         // adding it into our fund
         // TODO: check if this is actually correct
-        balance::join(&mut game_data.funds, amount_staked);
         vector::push_back(&mut game_data.bets, new_bet);
     }
 
