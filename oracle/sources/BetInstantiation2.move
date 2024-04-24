@@ -46,7 +46,7 @@ module 0x1::BetInstantiation2 {
         creator_address: address,
         consenting_address: address,
         question: String,
-        amount_staked: Balance<SUI>,
+        amount_staked_value: u64,
         bet_id: address,
         odds: u64,
         agreed_by_both: bool,
@@ -101,7 +101,7 @@ module 0x1::BetInstantiation2 {
     }
 
     // AUSTIN FUNCTIONS
-    fun receiveQuery(game_data: &mut GameData, bet_id: address, question: String): Query {
+    fun receiveQuery(game_data: &mut GameData, bet_id: address, question: String) {
         // access the vector of queries
         let new_query = Query {
             betId: bet_id,
@@ -110,26 +110,24 @@ module 0x1::BetInstantiation2 {
         };
         let all_queries = &mut game_data.queries;
         vector::push_back(all_queries, new_query);
-        // add it to the vector of queries
-        new_query
     }
 
     public fun requestValidate(ctx: &mut tx_context::TxContext, game_data: &mut GameData, coin: Coin<SUI>, r: & random::Random): Proposal{
-        let generator = random::new_generator(r, ctx);
+        let mut generator = random::new_generator(r, ctx);
         // get size of the vector
         let all_queries = &mut game_data.queries;
         // TODO: change this to generate a vector in size
         let size = vector::length(all_queries);
-        let index = random::generate_u32_in_range(&mut generator, 1, (size as u32));
+        let mut index = random::generate_u32_in_range(&mut generator, 1, (size as u32));
         
         // need to rewrite and look at copy
         let query_to_search = (vector::borrow_mut<Query>(all_queries, (index as u64)));
         let validators = &mut query_to_search.validators;
-        let count = 0;
+        let mut count = 0;
         while (count < 5) {
             let i = 0;
             count = count + 1;
-            let flag = false;
+            let mut flag = false;
             while (i < vector::length(validators)) {
                 if (vector::borrow<Proposal>(validators, i).proposer == tx_context::sender(ctx)) {
                     index = random::generate_u32_in_range(&mut generator, 1, size as u32);
@@ -147,13 +145,17 @@ module 0x1::BetInstantiation2 {
         };
             // get query
         let query = ((vector::borrow(all_queries, index as u64)));
-        Proposal {
+        let amount_staked = coin::into_balance(coin);
+        // adding the stake to the game balance
+        balance::join(&mut game_data.funds, amount_staked);
+        let new_proposal = Proposal {
             id: object::new(ctx),
             proposer: tx_context::sender(ctx),
             oracleId: query.betId,
             question: query.question,
             response: false,
-        }
+        };
+        new_proposal
     }
 
     public fun receiveValidate(ctx: &mut tx_context::TxContext, bet: &mut Bet, game_data: &mut GameData, prop: Proposal) {
@@ -170,6 +172,8 @@ module 0x1::BetInstantiation2 {
         };
 
         if (index == len) {
+            // need to figure out how to delete
+            object::delete(prop.id);
             return;
         };
 
@@ -189,10 +193,32 @@ module 0x1::BetInstantiation2 {
                 };
                 index = index + 1;
             };
+            let mut wrong_answers = 0;
             if (num_favor > 5) {
-                process_oracle_answer(ctx, bet, game_data, true);
+                wrong_answers = numProposals - num_favor;
             } else {
-                process_oracle_answer(ctx, bet, game_data, false);
+                wrong_answers = num_favor;
+            };
+            let right_answers = numProposals - wrong_answers;
+
+            let amount_earned = 10 + (wrong_answers * 10) / right_answers;
+
+            // doing the payouts
+            index = 0;
+            while (index < numProposals) {
+                let proposal = vector::borrow(&query.validators, index);
+                // wrong_answer
+                if ((proposal.response && num_favor <= 5) || (!proposal.response && num_favor > 5)) {
+                    let locked_funds = &mut game_data.funds;
+                    let payout = coin::take<SUI>(locked_funds, amount_earned, ctx);
+                    transfer::public_transfer(payout, proposal.proposer);
+                }
+            };
+
+            if (num_favor > 5) {
+                process_oracle_answer(ctx, query.betId, game_data, true);
+            } else {
+                process_oracle_answer(ctx, query.betId, game_data, false);
             };
             // TODO later: calculate payouts
         }
@@ -211,13 +237,14 @@ module 0x1::BetInstantiation2 {
         assert!(tx_context::sender(ctx) == game_data.owner, ECallerNotInstantiator);
         assert!(coin::value(&user_bet) == amount, EInsufficientBalance);
         let amount_staked = coin::into_balance(user_bet);
-        balance::join(&mut game_data.funds, copy amount_staked);
+        let amount_staked_value = amount_staked.value();
+        balance::join(&mut game_data.funds, amount_staked);
         let new_bet = Bet {
             id: object::new(ctx),
             creator_address,
             consenting_address,
             question,
-            amount_staked,
+            amount_staked_value,
             bet_id,
             odds,
             agreed_by_both: false, // Initially false until second party agrees
@@ -244,7 +271,7 @@ module 0x1::BetInstantiation2 {
         let locked_funds = &mut game_data.funds;
 
         // Withdraw staked amount from locked funds
-        let payout = coin::take<SUI>(locked_funds, bet.amount_staked.value(), ctx);
+        let payout = coin::take<SUI>(locked_funds, bet.amount_staked_value, ctx);
         transfer::public_transfer(payout, ctx.sender());
 
         // Remove bet
@@ -281,14 +308,14 @@ module 0x1::BetInstantiation2 {
         // if time past end time and no agreement, remove this bet
         if (current_time >= bet.game_end_time && !bet.agreed_by_both) {
             let locked_funds = &mut game_data.funds;
-            let payout = coin::take<SUI>(locked_funds, bet.amount_staked.value(), ctx);
+            let payout = coin::take<SUI>(locked_funds, bet.amount_staked_value, ctx);
             transfer::public_transfer(payout, bet.creator_address);
             bet.is_active = false;
         }
     }
 
     //after game end time, send bet to oracle for winner verification
-    public fun send_bet_to_oracle(ctx: &mut TxContext, bet: &mut Bet, clock: &Clock, game_data: &mut GameData, bet_id: address): Query {
+    public fun send_bet_to_oracle(ctx: &mut TxContext, bet: &mut Bet, clock: &Clock, game_data: &mut GameData, bet_id: address) {
         let index = find_bet_index(&game_data.bets, bet_id);
         assert!(index >= vector::length<Bet>(&game_data.bets), 404);
 
@@ -299,18 +326,18 @@ module 0x1::BetInstantiation2 {
                 current_time > bet.game_end_time, 403);
 
         //AUSTIN TO DEFINE THIS
-        let response = receiveQuery(game_data, bet_id, bet.question);
-        response
+        receiveQuery(game_data, bet_id, bet.question);
     }
 
     //after oracle finished, get the winner and perform payout
-    fun process_oracle_answer(ctx: &mut TxContext, bet: &mut Bet, game_data: &mut GameData, oracle_answer: bool) {
-        let index = find_bet_index(&game_data.bets, bet.bet_id);
+    fun process_oracle_answer(ctx: &mut TxContext, betId: address, game_data: &mut GameData, oracle_answer: bool) {
+        let index = find_bet_index(&game_data.bets, betId);
         assert!(index >= vector::length<Bet>(&game_data.bets), 404);
+        let bet = vector::borrow_mut(&mut game_data.bets, index);
 
         let winner_address = if (oracle_answer) { bet.creator_address } else { bet.consenting_address };
         let locked_funds = &mut game_data.funds;
-        let payout = coin::take<SUI>(locked_funds, bet.amount_staked.value(), ctx);
+        let payout = coin::take<SUI>(locked_funds, bet.amount_staked_value, ctx);
         transfer::public_transfer(payout, winner_address);
 
         bet.is_active = false;
