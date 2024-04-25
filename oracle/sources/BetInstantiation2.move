@@ -47,7 +47,7 @@ module 0x1::BetInstantiation2 {
         consenting_address: address,
         question: String,
         amount_staked_value: u64,
-        bet_id: address,
+        bet_id: ID,
         odds: u64,
         agreed_by_both: bool,
         //side of creator is the affirmative of whatever the bet says
@@ -60,7 +60,7 @@ module 0x1::BetInstantiation2 {
     public struct Proposal has store, key {
         id: UID,
         proposer: address,
-        oracleId: address,
+        oracleId: ID,
         question: String,
         // 0 or  1
         response: bool,
@@ -69,7 +69,7 @@ module 0x1::BetInstantiation2 {
     public struct Query has store {
         // p1: address,
         // p2: address,
-        betId: address,
+        betId: ID,
         question: String, 
         validators: vector<Proposal>
     }
@@ -101,7 +101,7 @@ module 0x1::BetInstantiation2 {
     }
 
     // AUSTIN FUNCTIONS
-    fun receiveQuery(game_data: &mut GameData, bet_id: address, question: String) {
+    fun receiveQuery(game_data: &mut GameData, bet_id: ID, question: String) {
         // access the vector of queries
         let new_query = Query {
             betId: bet_id,
@@ -229,7 +229,7 @@ module 0x1::BetInstantiation2 {
         game_start_time: u64, game_end_time: u64, user_bet: Coin<SUI>,
     ) {
         let creator_address = tx_context::sender(ctx);
-        let bet_id = tx_context::fresh_object_address(ctx);
+        let bet_id = tx_context::fresh_object_address(ctx).to_id();
         assert!(tx_context::sender(ctx) == game_data.owner, ECallerNotInstantiator);
         assert!(coin::value(&user_bet) == amount, EInsufficientBalance);
         let amount_staked = coin::into_balance(user_bet);
@@ -311,7 +311,7 @@ module 0x1::BetInstantiation2 {
     }
 
     //after game end time, send bet to oracle for winner verification
-    public fun send_bet_to_oracle(ctx: &mut TxContext, bet: &mut Bet, clock: &Clock, game_data: &mut GameData, bet_id: address) {
+    public fun send_bet_to_oracle(ctx: &mut TxContext, bet: &mut Bet, clock: &Clock, game_data: &mut GameData, bet_id: ID) {
         let index = find_bet_index(&game_data.bets, bet_id);
         assert!(index >= vector::length<Bet>(&game_data.bets), 404);
 
@@ -326,7 +326,7 @@ module 0x1::BetInstantiation2 {
     }
 
     //after oracle finished, get the winner and perform payout
-    fun process_oracle_answer(ctx: &mut TxContext, betId: address, game_data: &mut GameData, oracle_answer: bool) {
+    fun process_oracle_answer(ctx: &mut TxContext, betId: ID, game_data: &mut GameData, oracle_answer: bool) {
         let index = find_bet_index(&game_data.bets, betId);
         assert!(index >= vector::length<Bet>(&game_data.bets), 404);
         let bet = vector::borrow_mut(&mut game_data.bets, index);
@@ -340,7 +340,7 @@ module 0x1::BetInstantiation2 {
     }
 
     //find index of a bet in AllBets (unfortunately O(n))
-    fun find_bet_index(all_bets: &vector<Bet>, bet_id: address): u64 {
+    fun find_bet_index(all_bets: &vector<Bet>, bet_id: ID): u64 {
         let len = vector::length(all_bets);
         let mut index: u64 = 0;
 
