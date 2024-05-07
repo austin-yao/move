@@ -5,14 +5,14 @@ compiled_package_info:
     BetInstantiation: "0000000000000000000000000000000000000000000000000000000000000001"
     std: "0000000000000000000000000000000000000000000000000000000000000001"
     sui: "0000000000000000000000000000000000000000000000000000000000000002"
-  source_digest: 672ABFF275E67E81526887220421D30CCBD8F33A65476F059D90CE3A4A873EB9
+  source_digest: E59D439F9ED57F8891FC920AB7389804DB8B3F6B167BD594E08EEE5435364A44
   build_flags:
     dev_mode: false
     test_mode: false
     generate_docs: false
     install_dir: ~
     force_recompilation: false
-    lock_file: "./Move.lock"
+    lock_file: ".\\Move.lock"
     fetch_deps_only: false
     skip_fetch_latest_git_deps: false
     default_flavor: sui
