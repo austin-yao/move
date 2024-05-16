@@ -1,4 +1,4 @@
-module 0x1::BetInstantiation2 {
+module 0x0::BetInstantiation2 {
     use sui::coin::{Coin, Self};
     use sui::clock::{Self, Clock};
     use sui::random;
