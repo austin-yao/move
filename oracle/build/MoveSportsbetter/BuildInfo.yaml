@@ -5,7 +5,7 @@ compiled_package_info:
     BetInstantiation: "0000000000000000000000000000000000000000000000000000000000000001"
     std: "0000000000000000000000000000000000000000000000000000000000000001"
     sui: "0000000000000000000000000000000000000000000000000000000000000002"
-  source_digest: F6F097568888DF28439DB3023E6340D8015B9A3A738799D199617F5CAA54272A
+  source_digest: 87FE9092307172D40E4CD1FFAACC19C164772E7F31E32691CD28C24C95AAE6DE
   build_flags:
     dev_mode: false
     test_mode: false
@@ -14,12 +14,13 @@ compiled_package_info:
     force_recompilation: false
     lock_file: "./Move.lock"
     fetch_deps_only: false
-    skip_fetch_latest_git_deps: true
+    skip_fetch_latest_git_deps: false
     default_flavor: sui
     default_edition: ~
     deps_as_root: false
     silence_warnings: false
     warnings_are_errors: false
+    json_errors: false
     additional_named_addresses: {}
     lint_flag:
       no_lint: false
