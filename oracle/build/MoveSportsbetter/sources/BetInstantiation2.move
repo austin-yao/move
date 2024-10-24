@@ -7,11 +7,12 @@ module 0x0::BetInstantiation2 {
     use sui::balance::{Self, Balance};
     use sui::dynamic_object_field::{Self as dof};
     use sui::vec_set::{Self, VecSet};
+    use sui::bag::{Self, Bag};
 
     const EInsufficientBalance: u64 = 10;
     const ENoQueryToValidate: u64 = 11;
     const EBetNotFound: u64 = 12;
-    const ECallerNotInstantiator: u64 = 21;
+    const ECallerNotInstantiator: u64 = 13;
 
     public struct LockedFunds has key, store {
         id: UID,
@@ -35,12 +36,16 @@ module 0x0::BetInstantiation2 {
         id: UID,
     }
 
+    // GameData is an object, all_queries and approved_users cannot be too big
+    // store them as dynamic fields
     public struct GameData has key, store {
         id: UID,
         owner: address,
         funds: Balance<SUI>,
         approved_users: vector<address>,
         all_queries: VecSet<ID>,
+        approved_users_bag: Bag,
+        all_queries_bag: Bag
     }
 
     // Bet object structure
@@ -96,16 +101,26 @@ module 0x0::BetInstantiation2 {
             funds: coin::into_balance(coin),
             approved_users: vector[],
             all_queries: vec_set::empty<ID>(),
+            approved_users_bag: bag::new(ctx),
+            all_queries_bag: bag::new(ctx),
         };
 
         let InitializationCap { id } = init_cap;
         object::delete(id);
 
         // sharing ok because it is only modifiable by methods that we define
+        // this keeps track of all the data for the application
         transfer::share_object(game_data);
+
+        /*
+            alternate: using dynamic object fields and storing this data itself...
+        */
     }
 
     // AUSTIN FUNCTIONS
+    /*
+        called by the application to send a query up for betting
+    */
     fun receiveQuery(game_data: &mut GameData, bet_id: ID, question: String, ctx: &mut TxContext) {
         // access the vector of queries
         let new_query = Query {
@@ -115,6 +130,8 @@ module 0x0::BetInstantiation2 {
             validators: vector::empty<Proposal>(),
         };
         game_data.all_queries.insert(new_query.id.to_inner());
+
+        // don't use a dof for this. use a collection
         dof::add(&mut game_data.id, new_query.id.to_inner(), new_query)
     }
 
@@ -126,7 +143,7 @@ module 0x0::BetInstantiation2 {
         let mut desire_id = object::id(game_data);
         while (index < queries.length()) {
             // query_id is an ID refernece how to make it not a reference?
-            // because of this, store is not working since references do not have the store ability
+            // because of this, store is not working since references do not have the store ability -> dereference it.
             // just remove it
             let query_id = vector::remove(&mut queries, 0);
             let new_query_id = query_id;
@@ -150,6 +167,8 @@ module 0x0::BetInstantiation2 {
         };
         assert!(index < size, ENoQueryToValidate);
         // TODO: they could lose their stake if the bet settles before they report back with the information?
+            // keep track of all the users who have submitted proposals and all users who have a proposal
+            // we should first go through the list of users that have all submitted a proposal and then
         let query: &mut Query = dof::borrow_mut(& mut game_data.id, desire_id);
         let amount_staked = coin::into_balance(coin);
         balance::join(&mut game_data.funds, amount_staked);
