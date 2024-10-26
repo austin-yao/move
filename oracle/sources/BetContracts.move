@@ -7,13 +7,23 @@ module 0x0::BetInstantiation2 {
     use sui::balance::{Self, Balance};
     use sui::dynamic_object_field::{Self as dof};
     use sui::vec_set::{Self, VecSet};
+    use sui::vec_map::{Self, VecMap};
+    use sui::priority_queue::{Self, PriorityQueue};
     use sui::bag::{Self, Bag};
     use sui::table::{Self, Table};
+    use sui::object_table::{Self, ObjectTable};
+    use sui::table_vec::{Self, TableVec};
+
+    // TODO: for randomization, we can make a mapping from 
+    // number to ID, choose a random number and use that ID.
+    // grow the set of numbers if we are running out
 
     const EInsufficientBalance: u64 = 10;
     const ENoQueryToValidate: u64 = 11;
     const EBetNotFound: u64 = 12;
     const ECallerNotInstantiator: u64 = 13;
+    const EValidationError: u64 = 14;
+    const EWrongFundAmount: u64 = 15;
 
     public struct LockedFunds has key, store {
         id: UID,
@@ -43,13 +53,12 @@ module 0x0::BetInstantiation2 {
         id: UID,
         owner: address,
         funds: Balance<SUI>,
-        // approved_users: vector<address>,
-        // all_queries: VecSet<ID>,
-        // approved_users_bag: Bag,
-        // all_queries_bag: Bag
         approved_users: Bag,
-        all_queries: Table<ID, Query>,
-        all_bets: Table<ID, Bet>,
+        all_queries: ObjectTable<ID, Query>,
+        all_bets: ObjectTable<ID, Bet>,
+        query_count: u64,
+        num_to_query: Table<u64, ID>,
+        available_nums: TableVec<u64>
     }
 
     // Bet object structure
@@ -85,7 +94,8 @@ module 0x0::BetInstantiation2 {
         id: UID,
         betId: ID,
         question: String, 
-        validators: vector<Proposal>
+        // change validators into a mapping from sender to proposal
+        validators: VecMap<address, Proposal>
     }
 
     // replaces the initialize_contract function
@@ -104,8 +114,11 @@ module 0x0::BetInstantiation2 {
             owner: tx_context::sender(ctx),
             funds: coin::into_balance(coin),
             approved_users: bag::new(ctx),
-            all_queries: table::new<ID, Query>(ctx),
-            all_bets: table::new<ID, Bet>(ctx)
+            all_queries: object_table::new<ID, Query>(ctx),
+            all_bets: object_table::new<ID, Bet>(ctx),
+            query_count: 0,
+            num_to_query: table::new<u64, ID>(ctx),
+            available_nums: table_vec::empty<u64>(ctx)
         };
 
         let InitializationCap { id } = init_cap;
@@ -126,116 +139,131 @@ module 0x0::BetInstantiation2 {
             id: object::new(ctx),
             betId: bet_id,
             question: question,
-            validators: vector::empty<Proposal>(),
+            validators: vec_map::empty<address, Proposal>()
         };
-        game_data.all_queries.insert(new_query.id.to_inner());
-
-        // don't use a dof for this. use a collection
-        // dof::add(&mut game_data.id, new_query.id.to_inner(), new_query)
-        game_data.all_queries.add(new_query.id.to_inner(), new_query)
+        let temp = new_query.id.to_inner();
+        game_data.all_queries.add(temp, new_query);
+        if (game_data.available_nums.length() == 0) {
+            // increment query_count
+           game_data.query_count = game_data.query_count + 1;
+            game_data.num_to_query.add(game_data.query_count, temp);
+        } else {
+            let count = game_data.available_nums.pop_back();
+            game_data.num_to_query.add(game_data.query_count, temp);
+        };
     }
     
-    // TODO: rewrite this.
-    public fun requestValidate(ctx: &mut tx_context::TxContext, game_data: &mut GameData, coin: Coin<SUI>, r: & random::Random): Proposal {
-        // introduce randomness later, just find the first bet that we can use.
-        // let mut queries = game_data.all_queries.into_keys();
-        // let mut index = 0;
-        // let size = queries.length();
-        // let mut desire_id = object::id(game_data);
-        // while (index < queries.length()) {
-        //     // query_id is an ID refernece how to make it not a reference?
-        //     // because of this, store is not working since references do not have the store ability -> dereference it.
-        //     // just remove it
-        //     let query_id = vector::remove(&mut queries, 0);
-        //     let new_query_id = query_id;
-        //     vector::push_back(&mut queries, query_id);
-        //     let query: &mut Query = dof::borrow_mut(&mut game_data.id, new_query_id);
-        //     let mut j = 0;
-        //     let mut flag = false;
-        //     while (j < query.validators.length()) {
-        //         if (vector::borrow_mut(&mut query.validators, j).proposer == tx_context::sender(ctx)) {
-        //             flag = true;
-        //             break;
-        //         };
-        //         j = j + 1;
-        //     };
-        //     if (flag) {
-        //         index = index + 1;
-        //     } else {
-        //         desire_id = new_query_id;
-        //         break;
-        //     };
-        // };
-        // assert!(index < size, ENoQueryToValidate);
-        // // TODO: they could lose their stake if the bet settles before they report back with the information?
-        //     // keep track of all the users who have submitted proposals and all users who have a proposal
-        //     // we should first go through the list of users that have all submitted a proposal and then
-        // let query: &mut Query = dof::borrow_mut(& mut game_data.id, desire_id);
-        // let amount_staked = coin::into_balance(coin);
-        // balance::join(&mut game_data.funds, amount_staked);
-        // let new_proposal = Proposal {
-        //     id: object::new(ctx),
-        //     proposer: tx_context::sender(ctx),
-        //     oracleId: query.betId,
-        //     question: query.question,
-        //     response: false,
-        //     query_id: desire_id,
-        // };
-        // game_data.all_queries = vec_set::from_keys(queries);
-        // new_proposal
+    public fun requestValidate(ctx: &mut tx_context::TxContext, game_data: &mut GameData, r: & random::Random): Proposal {
+        // TODO: introduce randomness. For now, only choose the first available one
+        let mut i = 1;
+        let sender = tx_context::sender(ctx);
+        let proposal: Proposal;
+        while (i < game_data.query_count) {
+            let query_id = game_data.num_to_query.borrow(i);
+            let mut query = game_data.all_queries.borrow_mut(*query_id);
+            if (query.validators.contains(&sender)) {
+                i = i + 1;
+                continue;
+            } else {
+                break;
+            };
+        };
+
+        assert!(i < game_data.query_count, ENoQueryToValidate);
+
+        let query_id = game_data.num_to_query.borrow(i);
+        let mut query = game_data.all_queries.borrow_mut(*query_id);
+        proposal = Proposal {
+            id: object::new(ctx),
+            proposer: sender,
+            oracleId: query.betId,
+            question: query.question,
+            response: false,
+            query_id: *query_id
+        };
+        proposal
     }
     
     // TODO: rewrite this function
-    public fun receiveValidate(ctx: &mut tx_context::TxContext, bet: &mut Bet, game_data: &mut GameData, prop: Proposal) {
-        // assert!(dof::exists_(&game_data.id, prop.query_id), EBetNotFound);
+    public fun receiveValidate(ctx: &mut tx_context::TxContext, bet: &mut Bet, game_data: &mut GameData, prop: Proposal, coin: Coin<SUI>) {
+        let sender = tx_context::sender(ctx);
+        let prop_query_id = prop.query_id;
 
-        // let query: &mut Query = dof::borrow_mut(&mut game_data.id, prop.query_id);
+        // check that the bet and query exist
+        assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
+        assert!(game_data.all_queries.contains(prop.query_id), EBetNotFound);
 
-        // vector::push_back(&mut query.validators, prop);
+        let mut query = game_data.all_queries.borrow_mut(prop.query_id);
 
-        // if (vector::length(&query.validators) == 10) {
-        //     // calculate odds
-        //     let mut num_favor: u64 = 0;
-        //     let numProposals = vector::length(&query.validators);
-        //     let mut index = 0;
-        //     while (index < numProposals) {
-        //         let proposal = vector::borrow(&query.validators, index);
-        //         if (proposal.response) {
-        //             num_favor = num_favor + 1;
-        //         };
-        //         index = index + 1;
-        //     };
-        //     let mut wrong_answers = 0;
-        //     if (num_favor > 5) {
-        //         // everyone who said no is wrong
-        //         wrong_answers = numProposals - num_favor;
-        //     } else {
-        //         // everyone who said yes is wrong
-        //         wrong_answers = num_favor;
-        //     };
-        //     let right_answers = numProposals - wrong_answers;
+        // check that the sender hasn't already validated this one
+        assert!(!query.validators.contains(&sender), EValidationError);
+        query.validators.insert(sender, prop);
 
-        //     // TODO: they should also get some from the bet in case everyone is right
-        //     let amount_earned = 10 + (wrong_answers * 10) / right_answers;
+        assert!(coin.value() == 10, EWrongFundAmount);
+        let amount_staked = coin::into_balance(coin);
+        balance::join(&mut game_data.funds, amount_staked);
+        
+        // always need 11 validators.
+        // can make this into a parameter set in game_data as well.
+        if (query.validators.size() == 11) {
+            let mut num_in_favor = 0;
 
-        //     // doing the payouts
-        //     index = 0;
-        //     while (index < numProposals) {
-        //         let proposal = vector::borrow(&query.validators, index);
-        //         // right answer
-        //         if ((proposal.response && num_favor > 5) || (!proposal.response && num_favor <= 5)) {
-        //             let locked_funds = &mut game_data.funds;
-        //             let payout = coin::take<SUI>(locked_funds, amount_earned, ctx);
-        //             transfer::public_transfer(payout, proposal.proposer);
-        //         }
-        //     };
+            // deconstruct the query
+            let actual_query = game_data.all_queries.remove(prop_query_id);
+            let Query {id, betId, question: _, validators} = move actual_query;
+            let (vals, mut props) : (vector<address>, vector<Proposal>) = validators.into_keys_values();
+            let mut index = 0;
+            while (index < 11) {
+                let proposal = props.borrow(index);
+                if (proposal.response) {
+                    num_in_favor = num_in_favor + 1;
+                };
+                index = index + 1;
+            };
+            let mut wrong_answers = 0;
+            if (num_in_favor > 5) {
+                wrong_answers = 11 - num_in_favor;
+            } else {
+                wrong_answers = num_in_favor;
+            };
 
-        //     if (num_favor > 5) {
-        //         process_oracle_answer(ctx, query.betId, game_data, true);
-        //     } else {
-        //         process_oracle_answer(ctx, query.betId, game_data, false);
-        //     };
-        // }
+            let right_answers = 11 - wrong_answers;
+
+            // say arbitrarily that everyone puts in 10 sui to query
+            // total is 110 sui
+            // winners distribute it evenly. 
+            // TODO: factor in some percentage of the bet as well (0.5%)?
+            // TODO: floats not allowed in sui
+            let amount_earned =  (wrong_answers * 10) / right_answers;
+
+            index = 0;
+            while (index < 11) {
+                let proposal = props.remove(index);
+                if ((proposal.response && num_in_favor > 5) || (!proposal.response && num_in_favor <= 5)) {
+                    // initiate the transfer.
+                    let locked_funds = &mut game_data.funds;
+                    let payout = coin::take<SUI>(locked_funds, amount_earned, ctx);
+                    transfer::public_transfer(payout, proposal.proposer);
+                };
+                index = index + 1;
+
+                // delete the proposal
+                let Proposal {id, proposer: _, oracleId: _, question: _, response: _, query_id: _} = proposal;
+                id.delete();
+            };
+            
+            // process the oracle answer.
+            if (num_in_favor > 5) {
+                process_oracle_answer(ctx, betId, game_data, true);
+            } else {
+                process_oracle_answer(ctx, betId, game_data, false);
+            };
+
+            
+            // cleanup
+            id.delete();
+            props.destroy_empty();
+        }
     }
 
     // END AUSTIN
@@ -271,14 +299,15 @@ module 0x0::BetInstantiation2 {
             //be phrased as "Eagles will win vs. the Seahawks today", then creator has side 'Eagles win'
         };
         // adding it into our fund
-        // dof::add(&mut game_data.id, bet_id, new_bet)
         game_data.all_bets.add(bet_id, new_bet);
+
+        // TODO: emit an event that a bet has been created so that the front-end can list it.
     }
 
     // delete a bet if it;s not agreed upon
     public fun delete_bet(ctx: &mut TxContext, bet: &mut Bet, game_data: &mut GameData) {
         // assert!(dof::exists_(&game_data.id, bet.bet_id));
-        assert!(game_data.all_bets.contains(bet.id), EBetNotFound);
+        assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
         assert!(bet.creator_address == ctx.sender(), 403);
         assert!(!bet.agreed_by_both, 400);
 
@@ -302,14 +331,16 @@ module 0x0::BetInstantiation2 {
             game_start_time: _,
             game_end_time: _,
             is_active: _,
-        } = game_data.all_bets.remove(bet.id);
+        } = game_data.all_bets.remove(bet.id.to_inner());
         object::delete(id);
+
+        // TODO: emit an event that the bet has been deleted so that the front-end knows.
     }
 
     //second player in instantiated bet agrees to it here
     public fun agree_to_bet(ctx: &mut TxContext, bet: &mut Bet, clock: &Clock, game_data: &mut GameData, coin: Coin<SUI>) {
         let current_time = clock::timestamp_ms(clock);
-        assert!(game_data.all_bets.contains(bet.id), EBetNotFound);
+        assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
         
         //caller is consenting address and bet is not already agreed to
         assert!(bet.consenting_address == ctx.sender(), 403); // 403: Forbidden, not consenting address
@@ -322,12 +353,14 @@ module 0x0::BetInstantiation2 {
         balance::join(&mut game_data.funds, betStake);
         
         bet.agreed_by_both = true;
+
+        // emit an event so that the front-end knows?
     }
 
     // handle expiration of a bet agreement window
     public fun handle_expired_bet(ctx: &mut TxContext, bet: &mut Bet, clock: &Clock, game_data: &mut GameData) {
         let current_time = sui::clock::timestamp_ms(clock);
-        assert!(game_data.all_bets.contains(bet.id), EBetNotFound);
+        assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
 
         // if time past end time and no agreement, remove this bet
         if (current_time >= bet.game_end_time && !bet.agreed_by_both) {
@@ -347,14 +380,16 @@ module 0x0::BetInstantiation2 {
                 game_start_time: _,
                 game_end_time: _,
                 is_active: _,
-            } = game_data.all_bets.remove(bet.id);
+            } = game_data.all_bets.remove(bet.id.to_inner());
             object::delete(id);
         }
+
+        // TODO: emit an event so that the front end knows that the bet has been deleted.
     }
 
     //after game end time, send bet to oracle for winner verification
     public fun send_bet_to_oracle(ctx: &mut TxContext, bet: &mut Bet, clock: &Clock, game_data: &mut GameData, bet_id: ID) {
-        assert!(game_data.all_bets.contains(bet.id), EBetNotFound);
+        assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
 
         let current_time = clock::timestamp_ms(clock);
 
