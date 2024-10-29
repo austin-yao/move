@@ -1,4 +1,6 @@
-module 0x0::BetInstantiation2 {
+module 0x0::BetInstantiation2;
+
+
     use sui::coin::{Coin, Self};
     use sui::clock::{Self, Clock};
     use sui::random;
@@ -108,7 +110,7 @@ module 0x0::BetInstantiation2 {
     }
 
     //initialize the module, which only one address can before no others are able to 
-    public fun initialize_contract(ctx: &mut TxContext, init_cap: InitializationCap, coin: Coin<SUI>) {
+    public fun initialize_contract(init_cap: InitializationCap, coin: Coin<SUI>, ctx: &mut TxContext) {
         let game_data = GameData {
             id: object::new(ctx),
             owner: tx_context::sender(ctx),
@@ -127,6 +129,11 @@ module 0x0::BetInstantiation2 {
         // sharing ok because it is only modifiable by methods that we define
         // this keeps track of all the data for the application
         transfer::share_object(game_data);
+    }
+
+    public fun test(init_cap: InitializationCap, ctx: &mut TxContext) {
+        let InitializationCap { id } = init_cap;
+        object::delete(id);
     }
 
     // AUSTIN FUNCTIONS
@@ -153,7 +160,7 @@ module 0x0::BetInstantiation2 {
         };
     }
     
-    public fun requestValidate(ctx: &mut tx_context::TxContext, game_data: &mut GameData, r: & random::Random): Proposal {
+    public fun requestValidate(game_data: &mut GameData, ctx: &mut TxContext): Proposal {
         // TODO: introduce randomness. For now, only choose the first available one
         let mut i = 1;
         let sender = tx_context::sender(ctx);
@@ -185,7 +192,7 @@ module 0x0::BetInstantiation2 {
     }
     
     // TODO: rewrite this function
-    public fun receiveValidate(ctx: &mut tx_context::TxContext, bet: &mut Bet, game_data: &mut GameData, prop: Proposal, coin: Coin<SUI>) {
+    public fun receiveValidate(bet: &mut Bet, game_data: &mut GameData, prop: Proposal, coin: Coin<SUI>, ctx: &mut TxContext) {
         let sender = tx_context::sender(ctx);
         let prop_query_id = prop.query_id;
 
@@ -254,9 +261,9 @@ module 0x0::BetInstantiation2 {
             
             // process the oracle answer.
             if (num_in_favor > 5) {
-                process_oracle_answer(ctx, betId, game_data, true);
+                process_oracle_answer(betId, game_data, true, ctx);
             } else {
-                process_oracle_answer(ctx, betId, game_data, false);
+                process_oracle_answer(betId, game_data, false, ctx);
             };
 
             
@@ -269,16 +276,16 @@ module 0x0::BetInstantiation2 {
     // END AUSTIN
 
     //create a new Bet object
-    public fun create_bet(ctx: &mut TxContext, game_data: &mut GameData, consenting_address: address,
+    public fun create_bet(game_data: &mut GameData, consenting_address: address,
         question: String, amount: u64,
         odds: u64, 
-        game_start_time: u64, game_end_time: u64, user_bet: Coin<SUI>,
+        game_start_time: u64, game_end_time: u64, user_bet: Coin<SUI>, ctx: &mut TxContext
     ) {
         let creator_address = tx_context::sender(ctx);
         let bet_address = tx_context::fresh_object_address(ctx);
         let bet_id = bet_address.to_id();
-        assert!(tx_context::sender(ctx) == game_data.owner, ECallerNotInstantiator);
-        assert!(coin::value(&user_bet) == amount, EInsufficientBalance);
+        // assert!(tx_context::sender(ctx) == game_data.owner, ECallerNotInstantiator);
+        // assert!(coin::value(&user_bet) == amount, EInsufficientBalance);
         let amount_staked = coin::into_balance(user_bet);
         let amount_staked_value = amount_staked.value();
         balance::join(&mut game_data.funds, amount_staked);
@@ -305,7 +312,7 @@ module 0x0::BetInstantiation2 {
     }
 
     // delete a bet if it;s not agreed upon
-    public fun delete_bet(ctx: &mut TxContext, bet: &mut Bet, game_data: &mut GameData) {
+    public fun delete_bet(bet: &mut Bet, game_data: &mut GameData, ctx: &mut TxContext) {
         // assert!(dof::exists_(&game_data.id, bet.bet_id));
         assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
         assert!(bet.creator_address == ctx.sender(), 403);
@@ -338,7 +345,7 @@ module 0x0::BetInstantiation2 {
     }
 
     //second player in instantiated bet agrees to it here
-    public fun agree_to_bet(ctx: &mut TxContext, bet: &mut Bet, clock: &Clock, game_data: &mut GameData, coin: Coin<SUI>) {
+    public fun agree_to_bet(bet: &mut Bet, clock: &Clock, game_data: &mut GameData, coin: Coin<SUI>, ctx: &mut TxContext) {
         let current_time = clock::timestamp_ms(clock);
         assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
         
@@ -358,7 +365,7 @@ module 0x0::BetInstantiation2 {
     }
 
     // handle expiration of a bet agreement window
-    public fun handle_expired_bet(ctx: &mut TxContext, bet: &mut Bet, clock: &Clock, game_data: &mut GameData) {
+    public fun handle_expired_bet(bet: &mut Bet, clock: &Clock, game_data: &mut GameData, ctx: &mut TxContext) {
         let current_time = sui::clock::timestamp_ms(clock);
         assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
 
@@ -388,7 +395,7 @@ module 0x0::BetInstantiation2 {
     }
 
     //after game end time, send bet to oracle for winner verification
-    public fun send_bet_to_oracle(ctx: &mut TxContext, bet: &mut Bet, clock: &Clock, game_data: &mut GameData, bet_id: ID) {
+    public fun send_bet_to_oracle(bet: &mut Bet, clock: &Clock, game_data: &mut GameData, bet_id: ID, ctx: &mut TxContext) {
         assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
 
         let current_time = clock::timestamp_ms(clock);
@@ -401,7 +408,7 @@ module 0x0::BetInstantiation2 {
     }
 
     //after oracle finished, get the winner and perform payout
-    fun process_oracle_answer(ctx: &mut TxContext, betId: ID, game_data: &mut GameData, oracle_answer: bool) {
+    fun process_oracle_answer(betId: ID, game_data: &mut GameData, oracle_answer: bool, ctx: &mut TxContext) {
         assert!(game_data.all_bets.contains(betId), EBetNotFound);
         // let bet = vector::borrow_mut(&mut game_data.bets, index);
         let bet: &mut Bet = game_data.all_bets.borrow_mut(betId);
@@ -427,4 +434,3 @@ module 0x0::BetInstantiation2 {
         } = game_data.all_bets.remove(betId);
         object::delete(id);
     }
-}
