@@ -1,0 +1,1 @@
+sui client ptb --gas-budget 100000000 --assign sender @$MY_ADDRESS --move-call $PACKAGE_ID::BetInstantiation2::delete_bet @$BET_ID @$GAME_ID

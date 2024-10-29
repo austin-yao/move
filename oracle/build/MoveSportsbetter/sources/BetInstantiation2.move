@@ -280,17 +280,21 @@ module 0x0::BetInstantiation2;
         question: String, amount: u64,
         odds: u64, 
         game_start_time: u64, game_end_time: u64, user_bet: Coin<SUI>, ctx: &mut TxContext
-    ) {
+    ): ID {
         let creator_address = tx_context::sender(ctx);
-        let bet_address = tx_context::fresh_object_address(ctx);
-        let bet_id = bet_address.to_id();
+        // these two lines below are no longer necessary
+        // let bet_address = tx_context::fresh_object_address(ctx);
+        // let bet_id = bet_address.to_id();
+
         // assert!(tx_context::sender(ctx) == game_data.owner, ECallerNotInstantiator);
         // assert!(coin::value(&user_bet) == amount, EInsufficientBalance);
         let amount_staked = coin::into_balance(user_bet);
         let amount_staked_value = amount_staked.value();
         balance::join(&mut game_data.funds, amount_staked);
+        let bet_uid = object::new(ctx);
+        let bet_id = bet_uid.to_inner();
         let new_bet = Bet {
-            id: object::new(ctx),
+            id: bet_uid,
             creator_address,
             consenting_address,
             question,
@@ -309,16 +313,21 @@ module 0x0::BetInstantiation2;
         game_data.all_bets.add(bet_id, new_bet);
 
         // TODO: emit an event that a bet has been created so that the front-end can list it.
+        // TODO: return bet ID
+        return bet_id
     }
 
     // delete a bet if it;s not agreed upon
-    public fun delete_bet(bet: &mut Bet, game_data: &mut GameData, ctx: &mut TxContext) {
+    // TODO: take in a bet id instead of bet because you cannot pass in an immutable reference to an object_owned object. (shared is ok).
+    public fun delete_bet(bet_id: ID, game_data: &mut GameData, ctx: &mut TxContext) {
         // assert!(dof::exists_(&game_data.id, bet.bet_id));
-        assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
-        assert!(bet.creator_address == ctx.sender(), 403);
-        assert!(!bet.agreed_by_both, 400);
+        assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
 
         let locked_funds = &mut game_data.funds;
+        let mut bet = game_data.all_bets.borrow_mut(bet_id);
+
+        assert!(bet.creator_address == ctx.sender(), 403);
+        assert!(!bet.agreed_by_both, 400);
 
         // Withdraw staked amount from locked funds
         let payout = coin::take<SUI>(locked_funds, bet.amount_staked_value, ctx);
@@ -345,10 +354,10 @@ module 0x0::BetInstantiation2;
     }
 
     //second player in instantiated bet agrees to it here
-    public fun agree_to_bet(bet: &mut Bet, clock: &Clock, game_data: &mut GameData, coin: Coin<SUI>, ctx: &mut TxContext) {
+    public fun agree_to_bet(bet_id: ID, clock: &Clock, game_data: &mut GameData, coin: Coin<SUI>, ctx: &mut TxContext) {
         let current_time = clock::timestamp_ms(clock);
-        assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
-        
+        assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
+        let mut bet = game_data.all_bets.borrow_mut(bet_id);
         //caller is consenting address and bet is not already agreed to
         assert!(bet.consenting_address == ctx.sender(), 403); // 403: Forbidden, not consenting address
         assert!(!bet.agreed_by_both, 400); // 400: Bad Request, bet already agreed upon
@@ -361,13 +370,14 @@ module 0x0::BetInstantiation2;
         
         bet.agreed_by_both = true;
 
-        // emit an event so that the front-end knows?
+        // TODO: emit an event so that the front-end knows?
     }
 
     // handle expiration of a bet agreement window
-    public fun handle_expired_bet(bet: &mut Bet, clock: &Clock, game_data: &mut GameData, ctx: &mut TxContext) {
+    public fun handle_expired_bet(bet_id: ID, clock: &Clock, game_data: &mut GameData, ctx: &mut TxContext) {
         let current_time = sui::clock::timestamp_ms(clock);
-        assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
+        assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
+        let mut bet = game_data.all_bets.borrow_mut(bet_id);
 
         // if time past end time and no agreement, remove this bet
         if (current_time >= bet.game_end_time && !bet.agreed_by_both) {
@@ -395,8 +405,9 @@ module 0x0::BetInstantiation2;
     }
 
     //after game end time, send bet to oracle for winner verification
-    public fun send_bet_to_oracle(bet: &mut Bet, clock: &Clock, game_data: &mut GameData, bet_id: ID, ctx: &mut TxContext) {
-        assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
+    public fun send_bet_to_oracle(bet_id: ID, clock: &Clock, game_data: &mut GameData, ctx: &mut TxContext) {
+        assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
+        let mut bet = game_data.all_bets.borrow_mut(bet_id);
 
         let current_time = clock::timestamp_ms(clock);
 
