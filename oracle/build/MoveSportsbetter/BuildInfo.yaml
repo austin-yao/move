@@ -2,17 +2,17 @@
 compiled_package_info:
   package_name: MoveSportsbetter
   address_alias_instantiation:
-    BetInstantiation: "0000000000000000000000000000000000000000000000000000000000000001"
+    game: "0000000000000000000000000000000000000000000000000000000000000000"
     std: "0000000000000000000000000000000000000000000000000000000000000001"
     sui: "0000000000000000000000000000000000000000000000000000000000000002"
-  source_digest: FA2A46B921CE3318CC5FBFB9476BFF2170D791CCFAEE0E3BB85A4566BEA924DA
+  source_digest: 45277EE3CDDD187970F83908AAEA0AFCF415A649A38A17ED641B635899CE1C6B
   build_flags:
-    dev_mode: false
-    test_mode: false
+    dev_mode: true
+    test_mode: true
     generate_docs: false
     install_dir: ~
     force_recompilation: false
-    lock_file: "./Move.lock"
+    lock_file: ~
     fetch_deps_only: false
     skip_fetch_latest_git_deps: false
     default_flavor: sui

@@ -1,6 +1,4 @@
-module 0x0::BetInstantiation2;
-
-
+module game::betting {
     use sui::coin::{Coin, Self};
     use sui::clock::{Self, Clock};
     use sui::random;
@@ -15,7 +13,7 @@ module 0x0::BetInstantiation2;
     use sui::table::{Self, Table};
     use sui::object_table::{Self, ObjectTable};
     use sui::table_vec::{Self, TableVec};
-
+    
     // TODO: for randomization, we can make a mapping from 
     // number to ID, choose a random number and use that ID.
     // grow the set of numbers if we are running out
@@ -26,6 +24,9 @@ module 0x0::BetInstantiation2;
     const ECallerNotInstantiator: u64 = 13;
     const EValidationError: u64 = 14;
     const EWrongFundAmount: u64 = 15;
+    const ENotBetOwner: u64 = 16;
+    const EBetAlreadyInProgress: u64 = 17;
+    const EBetNoLongerActive: u64 = 18;
 
     public struct LockedFunds has key, store {
         id: UID,
@@ -190,8 +191,7 @@ module 0x0::BetInstantiation2;
         };
         proposal
     }
-    
-    // TODO: rewrite this function
+
     public fun receiveValidate(bet: &mut Bet, game_data: &mut GameData, prop: Proposal, coin: Coin<SUI>, ctx: &mut TxContext) {
         let sender = tx_context::sender(ctx);
         let prop_query_id = prop.query_id;
@@ -261,9 +261,9 @@ module 0x0::BetInstantiation2;
             
             // process the oracle answer.
             if (num_in_favor > 5) {
-                process_oracle_answer(betId, game_data, true, ctx);
+                process_oracle_answer(game_data, betId, true, ctx);
             } else {
-                process_oracle_answer(betId, game_data, false, ctx);
+                process_oracle_answer(game_data, betId, false, ctx);
             };
 
             
@@ -276,17 +276,14 @@ module 0x0::BetInstantiation2;
     // END AUSTIN
 
     //create a new Bet object
-    public fun create_bet(game_data: &mut GameData, consenting_address: address,
+    public fun create_bet(game_data: &mut GameData,
         question: String, amount: u64,
         odds: u64, 
         game_start_time: u64, game_end_time: u64, user_bet: Coin<SUI>, ctx: &mut TxContext
     ): ID {
         let creator_address = tx_context::sender(ctx);
-        // these two lines below are no longer necessary
-        // let bet_address = tx_context::fresh_object_address(ctx);
-        // let bet_id = bet_address.to_id();
-
-        // assert!(tx_context::sender(ctx) == game_data.owner, ECallerNotInstantiator);
+        
+        // TODO: standardize 10 
         // assert!(coin::value(&user_bet) == amount, EInsufficientBalance);
         let amount_staked = coin::into_balance(user_bet);
         let amount_staked_value = amount_staked.value();
@@ -296,7 +293,7 @@ module 0x0::BetInstantiation2;
         let new_bet = Bet {
             id: bet_uid,
             creator_address,
-            consenting_address,
+            consenting_address: @0x00,
             question,
             amount_staked_value,
             bet_id,
@@ -313,21 +310,19 @@ module 0x0::BetInstantiation2;
         game_data.all_bets.add(bet_id, new_bet);
 
         // TODO: emit an event that a bet has been created so that the front-end can list it.
-        // TODO: return bet ID
         return bet_id
     }
 
     // delete a bet if it;s not agreed upon
-    // TODO: take in a bet id instead of bet because you cannot pass in an immutable reference to an object_owned object. (shared is ok).
-    public fun delete_bet(bet_id: ID, game_data: &mut GameData, ctx: &mut TxContext) {
+    public fun delete_bet(game_data: &mut GameData, bet_id: ID, ctx: &mut TxContext) {
         // assert!(dof::exists_(&game_data.id, bet.bet_id));
         assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
 
         let locked_funds = &mut game_data.funds;
         let mut bet = game_data.all_bets.borrow_mut(bet_id);
 
-        assert!(bet.creator_address == ctx.sender(), 403);
-        assert!(!bet.agreed_by_both, 400);
+        assert!(bet.creator_address == ctx.sender(), ENotBetOwner);
+        assert!(!bet.agreed_by_both, EBetAlreadyInProgress);
 
         // Withdraw staked amount from locked funds
         let payout = coin::take<SUI>(locked_funds, bet.amount_staked_value, ctx);
@@ -354,23 +349,25 @@ module 0x0::BetInstantiation2;
     }
 
     //second player in instantiated bet agrees to it here
-    public fun agree_to_bet(bet_id: ID, clock: &Clock, game_data: &mut GameData, coin: Coin<SUI>, ctx: &mut TxContext) {
-        let current_time = clock::timestamp_ms(clock);
+    // TODO: add in times back later.
+    public fun agree_to_bet(game_data: &mut GameData, bet_id: ID, coin: Coin<SUI>, ctx: &mut TxContext) {
+        // let current_time = clock::timestamp_ms(clock);
         assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
         let mut bet = game_data.all_bets.borrow_mut(bet_id);
         //caller is consenting address and bet is not already agreed to
-        assert!(bet.consenting_address == ctx.sender(), 403); // 403: Forbidden, not consenting address
-        assert!(!bet.agreed_by_both, 400); // 400: Bad Request, bet already agreed upon
-        assert!(bet.is_active, 402); //402: Deprecated bet
-        assert!(current_time < bet.game_start_time, 408); // 408: Request Timeout, the window for agreeing to the bet has passed
-        //consenting player tokens to storage
-        
+        assert!(bet.creator_address != ctx.sender(), ENotBetOwner); // 403: Forbidden, not consenting address
+        assert!(!bet.agreed_by_both, EBetAlreadyInProgress); // 400: Bad Request, bet already agreed upon
+        assert!(bet.is_active, EBetNoLongerActive); //402: Deprecated bet
+        // TODO: add back times.
+        // assert!(current_time < bet.game_start_time, 408); // 408: Request Timeout, the window for agreeing to the bet has passed
+       
         let betStake = coin::into_balance(coin);
         balance::join(&mut game_data.funds, betStake);
         
         bet.agreed_by_both = true;
+        bet.consenting_address = ctx.sender();
 
-        // TODO: emit an event so that the front-end knows?
+        // TODO: emit an event so that the front-end knows
     }
 
     // handle expiration of a bet agreement window
@@ -405,7 +402,7 @@ module 0x0::BetInstantiation2;
     }
 
     //after game end time, send bet to oracle for winner verification
-    public fun send_bet_to_oracle(bet_id: ID, clock: &Clock, game_data: &mut GameData, ctx: &mut TxContext) {
+    public fun send_bet_to_oracle(game_data: &mut GameData, bet_id: ID, clock: &Clock, ctx: &mut TxContext) {
         assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
         let mut bet = game_data.all_bets.borrow_mut(bet_id);
 
@@ -419,7 +416,7 @@ module 0x0::BetInstantiation2;
     }
 
     //after oracle finished, get the winner and perform payout
-    fun process_oracle_answer(betId: ID, game_data: &mut GameData, oracle_answer: bool, ctx: &mut TxContext) {
+    fun process_oracle_answer(game_data: &mut GameData, betId: ID, oracle_answer: bool, ctx: &mut TxContext) {
         assert!(game_data.all_bets.contains(betId), EBetNotFound);
         // let bet = vector::borrow_mut(&mut game_data.bets, index);
         let bet: &mut Bet = game_data.all_bets.borrow_mut(betId);
@@ -445,3 +442,39 @@ module 0x0::BetInstantiation2;
         } = game_data.all_bets.remove(betId);
         object::delete(id);
     }
+
+    // Accessors
+    public fun bet_exists(game_data: &mut GameData, bet_id: ID): bool {
+        game_data.all_bets.contains(bet_id)
+    }
+
+    public fun creator(bet: &Bet): address {
+        bet.creator_address
+    }
+
+    public fun consentor(bet: &Bet): address {
+        bet.consenting_address
+    }
+
+    public fun question(bet: &Bet): String {
+        bet.question
+    }
+
+    public fun agreed(bet: &Bet): bool {
+        bet.agreed_by_both
+    }
+
+    public fun active(bet: &Bet): bool {
+        bet.is_active
+    }
+
+    // Helpers for testing
+    #[test_only]
+    public fun get_and_transfer_initialization_cap_for_testing(ctx: &mut TxContext) {
+        let init_cap = InitializationCap {
+            id: object::new(ctx), 
+        };
+
+        transfer::transfer(init_cap, tx_context::sender(ctx));
+    }
+}
