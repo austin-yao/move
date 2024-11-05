@@ -35,10 +35,10 @@ module game::oracle_tests {
             bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 50, 50, 1, 10000, coin, scenario.ctx());
             // how to actually view the bet?
             assert!(game_data.bet_exists(bet_id), 0);
-            let bet = scenario.take_shared_by_id<Bet>(bet_id);
+            let bet = game_data.access_bet(bet_id);
             assert!(bet.creator() == admin, 1);
-            
-            test_scenario::return_immutable<Bet>(bet);
+            assert!(bet.question() == b"Does this work?".to_string(), 2);
+
             test_scenario::return_shared(game_data);
         };
 

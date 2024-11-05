@@ -52,6 +52,7 @@ module game::betting {
 
     // GameData is an object, all_queries and approved_users cannot be too big
     // store them as dynamic fields
+    // TODO: can consider not even needing to store all_bets. can make them all shared objects like game_data.
     public struct GameData has key, store {
         id: UID,
         owner: address,
@@ -444,6 +445,10 @@ module game::betting {
     }
 
     // Accessors
+    public fun access_bet(game_data: &mut GameData, bet_id: ID): &Bet {
+        assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
+        game_data.all_bets.borrow(bet_id)
+    }
     public fun bet_exists(game_data: &mut GameData, bet_id: ID): bool {
         game_data.all_bets.contains(bet_id)
     }
@@ -458,6 +463,10 @@ module game::betting {
 
     public fun question(bet: &Bet): String {
         bet.question
+    }
+
+    public fun amount_staked(bet: &Bet): u64 {
+        bet.amount_staked_value
     }
 
     public fun agreed(bet: &Bet): bool {
