@@ -27,6 +27,8 @@ module game::betting {
     const ENotBetOwner: u64 = 16;
     const EBetAlreadyInProgress: u64 = 17;
     const EBetNoLongerActive: u64 = 18;
+    const EBetNotYetInProgress: u64 = 19;
+    const EQueryNotFound: u64 = 20;
 
     public struct LockedFunds has key, store {
         id: UID,
@@ -59,7 +61,7 @@ module game::betting {
         funds: Balance<SUI>,
         approved_users: Bag,
         all_queries: ObjectTable<ID, Query>,
-        all_bets: ObjectTable<ID, Bet>,
+        // all_bets: ObjectTable<ID, Bet>,
         query_count: u64,
         num_to_query: Table<u64, ID>,
         available_nums: TableVec<u64>
@@ -102,7 +104,7 @@ module game::betting {
         validators: VecMap<address, Proposal>
     }
 
-    // replaces the initialize_contract function
+    // Called on contract initialization. Gives InitializationCap to caller.
     fun init(ctx: &mut TxContext) {
         let init_cap = InitializationCap {
             id: object::new(ctx), 
@@ -111,7 +113,7 @@ module game::betting {
         transfer::transfer(init_cap, tx_context::sender(ctx));
     }
 
-    //initialize the module, which only one address can before no others are able to 
+    // Initializes the contract with the Initialization Cap
     public fun initialize_contract(init_cap: InitializationCap, coin: Coin<SUI>, ctx: &mut TxContext) {
         let game_data = GameData {
             id: object::new(ctx),
@@ -119,7 +121,7 @@ module game::betting {
             funds: coin::into_balance(coin),
             approved_users: bag::new(ctx),
             all_queries: object_table::new<ID, Query>(ctx),
-            all_bets: object_table::new<ID, Bet>(ctx),
+            // all_bets: object_table::new<ID, Bet>(ctx),
             query_count: 0,
             num_to_query: table::new<u64, ID>(ctx),
             available_nums: table_vec::empty<u64>(ctx)
@@ -133,21 +135,16 @@ module game::betting {
         transfer::share_object(game_data);
     }
 
-    public fun test(init_cap: InitializationCap, ctx: &mut TxContext) {
-        let InitializationCap { id } = init_cap;
-        object::delete(id);
-    }
-
     // AUSTIN FUNCTIONS
     /*
         called by the application to send a query up for betting
     */
-    fun receiveQuery(game_data: &mut GameData, bet_id: ID, question: String, ctx: &mut TxContext) {
+    fun receiveQuery(game_data: &mut GameData, bet: &mut Bet, ctx: &mut TxContext) {
         // access the vector of queries
         let new_query = Query {
             id: object::new(ctx),
-            betId: bet_id,
-            question: question,
+            betId: bet.bet_id,
+            question: bet.question,
             validators: vec_map::empty<address, Proposal>()
         };
         let temp = new_query.id.to_inner();
@@ -193,13 +190,14 @@ module game::betting {
         proposal
     }
 
-    public fun receiveValidate(bet: &mut Bet, game_data: &mut GameData, prop: Proposal, coin: Coin<SUI>, ctx: &mut TxContext) {
+    public fun receiveValidate(game_data: &mut GameData, bet: &mut Bet, prop: Proposal, coin: Coin<SUI>, ctx: &mut TxContext) {
         let sender = tx_context::sender(ctx);
         let prop_query_id = prop.query_id;
 
         // check that the bet and query exist
-        assert!(game_data.all_bets.contains(bet.id.to_inner()), EBetNotFound);
-        assert!(game_data.all_queries.contains(prop.query_id), EBetNotFound);
+        assert!(bet.is_active, EBetNoLongerActive);
+        assert!(bet.agreed_by_both, EBetNotYetInProgress);
+        assert!(game_data.all_queries.contains(prop.query_id), EQueryNotFound);
 
         let mut query = game_data.all_queries.borrow_mut(prop.query_id);
 
@@ -262,12 +260,11 @@ module game::betting {
             
             // process the oracle answer.
             if (num_in_favor > 5) {
-                process_oracle_answer(game_data, betId, true, ctx);
+                process_oracle_answer(game_data, bet, true, ctx);
             } else {
-                process_oracle_answer(game_data, betId, false, ctx);
+                process_oracle_answer(game_data, bet, false, ctx);
             };
 
-            
             // cleanup
             id.delete();
             props.destroy_empty();
@@ -307,20 +304,17 @@ module game::betting {
             //example: bet String descriptions should 
             //be phrased as "Eagles will win vs. the Seahawks today", then creator has side 'Eagles win'
         };
-        // adding it into our fund
-        game_data.all_bets.add(bet_id, new_bet);
+
+        transfer::share_object(new_bet);
 
         // TODO: emit an event that a bet has been created so that the front-end can list it.
         return bet_id
     }
 
     // delete a bet if it;s not agreed upon
-    public fun delete_bet(game_data: &mut GameData, bet_id: ID, ctx: &mut TxContext) {
-        // assert!(dof::exists_(&game_data.id, bet.bet_id));
-        assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
-
+    public fun delete_bet(game_data: &mut GameData, mut bet: Bet, ctx: &mut TxContext) {
         let locked_funds = &mut game_data.funds;
-        let mut bet = game_data.all_bets.borrow_mut(bet_id);
+        // let mut bet = game_data.all_bets.borrow_mut(bet_id);
 
         assert!(bet.creator_address == ctx.sender(), ENotBetOwner);
         assert!(!bet.agreed_by_both, EBetAlreadyInProgress);
@@ -343,7 +337,7 @@ module game::betting {
             game_start_time: _,
             game_end_time: _,
             is_active: _,
-        } = game_data.all_bets.remove(bet.id.to_inner());
+        } = bet;
         object::delete(id);
 
         // TODO: emit an event that the bet has been deleted so that the front-end knows.
@@ -351,10 +345,9 @@ module game::betting {
 
     //second player in instantiated bet agrees to it here
     // TODO: add in times back later.
-    public fun agree_to_bet(game_data: &mut GameData, bet_id: ID, coin: Coin<SUI>, ctx: &mut TxContext) {
+    public fun agree_to_bet(game_data: &mut GameData, bet: &mut Bet, coin: Coin<SUI>, ctx: &mut TxContext) {
         // let current_time = clock::timestamp_ms(clock);
-        assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
-        let mut bet = game_data.all_bets.borrow_mut(bet_id);
+
         //caller is consenting address and bet is not already agreed to
         assert!(bet.creator_address != ctx.sender(), ENotBetOwner); // 403: Forbidden, not consenting address
         assert!(!bet.agreed_by_both, EBetAlreadyInProgress); // 400: Bad Request, bet already agreed upon
@@ -372,61 +365,16 @@ module game::betting {
     }
 
     // handle expiration of a bet agreement window
-    public fun handle_expired_bet(bet_id: ID, clock: &Clock, game_data: &mut GameData, ctx: &mut TxContext) {
+    public fun handle_expired_bet(game_data: &mut GameData, mut bet: Bet, clock: &Clock, ctx: &mut TxContext) {
         let current_time = sui::clock::timestamp_ms(clock);
-        assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
-        let mut bet = game_data.all_bets.borrow_mut(bet_id);
+        // assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
+        // let mut bet = game_data.all_bets.borrow_mut(bet_id);
+        assert!(bet.is_active, EBetNoLongerActive);
+        assert!(current_time >= bet.game_end_time && !bet.agreed_by_both, EBetAlreadyInProgress);
 
-        // if time past end time and no agreement, remove this bet
-        if (current_time >= bet.game_end_time && !bet.agreed_by_both) {
-            let locked_funds = &mut game_data.funds;
-            let payout = coin::take<SUI>(locked_funds, bet.amount_staked_value, ctx);
-            transfer::public_transfer(payout, bet.creator_address);
-            bet.is_active = false;
-            let Bet {
-                id,
-                creator_address: _,
-                consenting_address: _,
-                question: _,
-                amount_staked_value: _,
-                bet_id: _,
-                odds: _,
-                agreed_by_both: _,
-                game_start_time: _,
-                game_end_time: _,
-                is_active: _,
-            } = game_data.all_bets.remove(bet.id.to_inner());
-            object::delete(id);
-        }
-
-        // TODO: emit an event so that the front end knows that the bet has been deleted.
-    }
-
-    //after game end time, send bet to oracle for winner verification
-    public fun send_bet_to_oracle(game_data: &mut GameData, bet_id: ID, clock: &Clock, ctx: &mut TxContext) {
-        assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
-        let mut bet = game_data.all_bets.borrow_mut(bet_id);
-
-        let current_time = clock::timestamp_ms(clock);
-
-        //Only correct creator/second party can call this, and after bet end time
-        assert!((ctx.sender() == bet.creator_address || ctx.sender() == bet.consenting_address) &&
-                current_time > bet.game_end_time, 403);
-
-        receiveQuery(game_data, bet_id, bet.question, ctx);
-    }
-
-    //after oracle finished, get the winner and perform payout
-    fun process_oracle_answer(game_data: &mut GameData, betId: ID, oracle_answer: bool, ctx: &mut TxContext) {
-        assert!(game_data.all_bets.contains(betId), EBetNotFound);
-        // let bet = vector::borrow_mut(&mut game_data.bets, index);
-        let bet: &mut Bet = game_data.all_bets.borrow_mut(betId);
-
-        let winner_address = if (oracle_answer) { bet.creator_address } else { bet.consenting_address };
         let locked_funds = &mut game_data.funds;
         let payout = coin::take<SUI>(locked_funds, bet.amount_staked_value, ctx);
-        transfer::public_transfer(payout, winner_address);
-
+        transfer::public_transfer(payout, bet.creator_address);
         bet.is_active = false;
         let Bet {
             id,
@@ -440,19 +388,37 @@ module game::betting {
             game_start_time: _,
             game_end_time: _,
             is_active: _,
-        } = game_data.all_bets.remove(betId);
+        } = bet;
         object::delete(id);
+
+        // TODO: emit an event so that the front end knows that the bet has been deleted.
+    }
+
+    //after game end time, send bet to oracle for winner verification
+    public fun send_bet_to_oracle(game_data: &mut GameData, bet: &mut Bet, clock: &Clock, ctx: &mut TxContext) {
+        assert!(bet.is_active, EBetNoLongerActive);
+        assert!(bet.agreed_by_both, EBetNotYetInProgress);
+
+        let current_time = clock::timestamp_ms(clock);
+
+        //Only correct creator/second party can call this, and after bet end time
+        assert!((ctx.sender() == bet.creator_address || ctx.sender() == bet.consenting_address) &&
+                current_time > bet.game_end_time, 403);
+
+        receiveQuery(game_data, bet, ctx);
+    }
+
+    //after oracle finished, get the winner and perform payout
+    fun process_oracle_answer(game_data: &mut GameData, bet: &mut Bet, oracle_answer: bool, ctx: &mut TxContext) {
+        let winner_address = if (oracle_answer) { bet.creator_address } else { bet.consenting_address };
+        let locked_funds = &mut game_data.funds;
+        let payout = coin::take<SUI>(locked_funds, bet.amount_staked_value, ctx);
+        transfer::public_transfer(payout, winner_address);
+
+        bet.is_active = false;
     }
 
     // Accessors
-    public fun access_bet(game_data: &mut GameData, bet_id: ID): &Bet {
-        assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
-        game_data.all_bets.borrow(bet_id)
-    }
-    public fun bet_exists(game_data: &mut GameData, bet_id: ID): bool {
-        game_data.all_bets.contains(bet_id)
-    }
-
     public fun creator(bet: &Bet): address {
         bet.creator_address
     }
