@@ -54,7 +54,6 @@ module game::betting {
 
     // GameData is an object, all_queries and approved_users cannot be too big
     // store them as dynamic fields
-    // TODO: can consider not even needing to store all_bets. can make them all shared objects like game_data.
     public struct GameData has key, store {
         id: UID,
         owner: address,
@@ -164,10 +163,11 @@ module game::betting {
         let mut i = 1;
         let sender = tx_context::sender(ctx);
         let proposal: Proposal;
-        while (i < game_data.query_count) {
+        while (i <= game_data.query_count) {
             let query_id = game_data.num_to_query.borrow(i);
             let mut query = game_data.all_queries.borrow_mut(*query_id);
             if (query.validators.contains(&sender)) {
+                std::debug::print(&b"Here in the loop");
                 i = i + 1;
                 continue;
             } else {
@@ -175,7 +175,7 @@ module game::betting {
             };
         };
 
-        assert!(i < game_data.query_count, ENoQueryToValidate);
+        assert!(i <= game_data.query_count, ENoQueryToValidate);
 
         let query_id = game_data.num_to_query.borrow(i);
         let mut query = game_data.all_queries.borrow_mut(*query_id);
@@ -395,15 +395,17 @@ module game::betting {
     }
 
     //after game end time, send bet to oracle for winner verification
-    public fun send_bet_to_oracle(game_data: &mut GameData, bet: &mut Bet, clock: &Clock, ctx: &mut TxContext) {
+    public fun send_bet_to_oracle(game_data: &mut GameData, bet: &mut Bet, ctx: &mut TxContext) {
         assert!(bet.is_active, EBetNoLongerActive);
         assert!(bet.agreed_by_both, EBetNotYetInProgress);
 
-        let current_time = clock::timestamp_ms(clock);
+        // TODO: add clock back in
+        // let current_time = clock::timestamp_ms(clock);
 
         //Only correct creator/second party can call this, and after bet end time
-        assert!((ctx.sender() == bet.creator_address || ctx.sender() == bet.consenting_address) &&
-                current_time > bet.game_end_time, 403);
+        // assert!((ctx.sender() == bet.creator_address || ctx.sender() == bet.consenting_address) &&
+        //         current_time > bet.game_end_time, 403);
+        assert!((ctx.sender() == bet.creator_address || ctx.sender() == bet.consenting_address), 403);
 
         receiveQuery(game_data, bet, ctx);
     }
@@ -441,6 +443,30 @@ module game::betting {
 
     public fun active(bet: &Bet): bool {
         bet.is_active
+    }
+
+    public fun id(prop: &Proposal): ID {
+        prop.id.to_inner()
+    }
+
+    public fun proposer(prop: &Proposal): address {
+        prop.proposer
+    }
+
+    public fun oracleId(prop: &Proposal): ID {
+        prop.oracleId
+    }
+
+    public fun p_question(prop: &Proposal): String {
+        prop.question
+    }
+
+    public fun response(prop: &Proposal): bool {
+        prop.response
+    }
+
+    public fun query_id(prop: &Proposal): ID {
+        prop.query_id
     }
 
     // Helpers for testing

@@ -296,6 +296,64 @@ module game::oracle_tests {
         scenario.end();
     }
 
+    #[test]
+    fun test_query_proposal() {
+        let admin = @0xAD;
+        let p1 = @0xF1;
+        let p2 = @0xF2;
+        let prop_player = @0xF3;
+
+        let mut scenario = test_scenario::begin(prop_player);
+
+        scenario.initialize_contract_for_test(admin);
+
+        // Step 2: Accepting the bet
+        scenario.next_tx(p1);
+        let bet_id = {
+            let mut game_data = scenario.take_shared<GameData>();
+            let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
+
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 50, 50, 1, 10000, coin, scenario.ctx());
+            test_scenario::return_shared(game_data);
+            bet_id
+        };
+
+        scenario.next_tx(p2);
+        {
+            let mut game_data = scenario.take_shared<GameData>();
+            let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
+            let mut bet = scenario.take_shared_by_id<Bet>(bet_id);
+            
+            betting::agree_to_bet(&mut game_data, &mut bet, coin, scenario.ctx());
+            test_scenario::return_shared(game_data);
+            test_scenario::return_shared(bet);
+        };
+
+        // Step 3: Sending the bet to the oracle
+        scenario.next_tx(p1);
+        {
+            let mut game_data = scenario.take_shared<GameData>();
+            let mut bet = scenario.take_shared_by_id<Bet>(bet_id);
+            betting::send_bet_to_oracle(&mut game_data, &mut bet, scenario.ctx());
+
+            test_scenario::return_shared(game_data);
+            test_scenario::return_shared(bet);
+        };
+        
+        // Step 4: Requesting a bet to validate
+        scenario.next_tx(prop_player);
+        {
+            let mut game_data = scenario.take_shared<GameData>();
+            let proposal: Proposal = betting::requestValidate(&mut game_data, scenario.ctx());
+            assert!(proposal.oracleId() == bet_id, 1);
+
+            test_scenario::return_shared(game_data);
+            transfer::public_transfer(proposal, prop_player);
+        };
+
+        scenario.end();
+    }
+
     // Helpers
     use fun initialize_contract_for_test as Scenario.initialize_contract_for_test;
 
