@@ -26,7 +26,7 @@ module game::betting {
     const EBetNotYetInProgress: u64 = 19;
     const EQueryNotFound: u64 = 20;
 
-    const VAL_SIZE: u64 = 1;
+    const VAL_SIZE: u64 = 3;
 
     // public struct ApprovedUsers has key, store {
     //     id: UID,
@@ -231,7 +231,7 @@ module game::betting {
 
             index = 0;
             while (index < VAL_SIZE) {
-                let proposal = props.remove(index);
+                let proposal = props.remove(0);
                 // check to see if they got the correct answer, if so, then initiate a transfer
                 if ((proposal.response && num_in_favor > majority) || (!proposal.response && num_in_favor <= majority)) {
                     // initiate the transfer.
