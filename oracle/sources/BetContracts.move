@@ -86,7 +86,8 @@ module game::betting {
         betId: ID,
         question: String, 
         // change validators into a mapping from sender to proposal
-        validators: VecMap<address, Proposal>
+        validators: VecMap<address, Proposal>,
+        balance: Balance<SUI>
     }
 
     // For Emitting Events
@@ -139,6 +140,14 @@ module game::betting {
         transfer::share_object(game_data);
     }
 
+    // TODO: Take a flat fee of every bet so that total_balance actually grows
+    public fun withdraw(game_data: &mut GameData, ctx: &mut TxContext) {
+        assert!(ctx.sender() == game_data.owner, ECallerNotInstantiator);
+        let total_balance = game_data.funds.value();
+        let coin = coin::take(&mut game_data.funds, total_balance, ctx);
+        transfer::public_transfer(coin, game_data.owner);
+    }
+
     // AUSTIN FUNCTIONS
     /*
         called by the application to send a query up for betting
@@ -149,7 +158,8 @@ module game::betting {
             id: object::new(ctx),
             betId: bet.bet_id,
             question: bet.question,
-            validators: vec_map::empty<address, Proposal>()
+            validators: vec_map::empty<address, Proposal>(),
+            balance: balance::zero<SUI>()
         };
         let temp = new_query.id.to_inner();
         game_data.all_queries.add(temp, new_query);
@@ -212,14 +222,14 @@ module game::betting {
 
         assert!(coin.value() == 10, EWrongFundAmount);
         let amount_staked = coin::into_balance(coin);
-        balance::join(&mut game_data.funds, amount_staked);
+        balance::join(&mut query.balance, amount_staked);
         
         if (query.validators.size() == VAL_SIZE) {
             let mut num_in_favor = 0;
 
             // deconstruct the query
             let actual_query = game_data.all_queries.remove(prop_query_id);
-            let Query {id, betId: _, question: _, validators} = move actual_query;
+            let Query {id, betId: _, question: _, validators, mut balance} = move actual_query;
             let (_vals, mut props) : (vector<address>, vector<Proposal>) = validators.into_keys_values();
             let mut index = 0;
             while (index < VAL_SIZE) {
@@ -253,7 +263,7 @@ module game::betting {
                 // check to see if they got the correct answer, if so, then initiate a transfer
                 if ((proposal.response && num_in_favor > majority) || (!proposal.response && num_in_favor <= majority)) {
                     // initiate the transfer.
-                    let payout = coin::take<SUI>(&mut game_data.funds, amount_earned, ctx);
+                    let payout = coin::take<SUI>(&mut balance, amount_earned, ctx);
 
                     transfer::public_transfer(payout, proposal.proposer);
                 };
@@ -270,6 +280,8 @@ module game::betting {
             } else {
                 process_oracle_answer(game_data, bet, false, ctx);
             };
+
+            balance.destroy_zero();
 
             // cleanup
             id.delete();
@@ -322,8 +334,6 @@ module game::betting {
     
     // delete a bet if it;s not agreed upon
     public fun delete_bet(game_data: &mut GameData, mut bet: Bet, ctx: &mut TxContext) {
-        let locked_funds = &mut game_data.funds;
-
         assert!(bet.creator_address == ctx.sender(), ENotBetOwner);
         assert!(!bet.agreed_by_both, EBetAlreadyInProgress);
 
@@ -372,7 +382,6 @@ module game::betting {
         assert!(coin.value() == bet.against_amount, EInvalidStakeSize);
 
         let betStake = coin::into_balance(coin);
-        // balance::join(&mut game_data.funds, betStake);
         balance::join(&mut bet.stake, betStake);
         
         bet.agreed_by_both = true;
@@ -389,8 +398,6 @@ module game::betting {
 
         assert!(bet.is_active, EBetNoLongerActive);
         assert!(current_time >= bet.game_end_time && !bet.agreed_by_both, EBetAlreadyInProgress);
-
-        let locked_funds = &mut game_data.funds;
 
         let payout_amount = bet.for_amount;
         let payout = coin::take<SUI>(&mut bet.stake, payout_amount, ctx);
@@ -439,7 +446,6 @@ module game::betting {
     //after oracle finished, get the winner and perform payout
     fun process_oracle_answer(game_data: &mut GameData, bet: &mut Bet, oracle_answer: bool, ctx: &mut TxContext) {
         let winner_address = if (oracle_answer) { bet.creator_address } else { bet.consenting_address };
-        let locked_funds = &mut game_data.funds;
         let payout = coin::take<SUI>(&mut bet.stake, bet.for_amount + bet.against_amount, ctx);
         transfer::public_transfer(payout, winner_address);
 
