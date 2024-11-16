@@ -9,6 +9,7 @@ module game::betting {
     use sui::table::{Self, Table};
     use sui::object_table::{Self, ObjectTable};
     use sui::table_vec::{Self, TableVec};
+    use sui::event;
     
     // TODO: for randomization, we can make a mapping from 
     // number to ID, choose a random number and use that ID.
@@ -16,7 +17,6 @@ module game::betting {
 
     const EInsufficientBalance: u64 = 10;
     const ENoQueryToValidate: u64 = 11;
-    const EBetNotFound: u64 = 12;
     const ECallerNotInstantiator: u64 = 13;
     const EValidationError: u64 = 14;
     const EWrongFundAmount: u64 = 15;
@@ -39,8 +39,6 @@ module game::betting {
         id: UID,
     }
 
-    // GameData is an object, all_queries and approved_users cannot be too big
-    // store them as dynamic fields
     public struct GameData has key, store {
         id: UID,
         owner: address,
@@ -67,7 +65,8 @@ module game::betting {
         //ex: Eagles defeat Seahawks means instantiator is on Eagles win side
         game_start_time: u64,
         game_end_time: u64,
-        is_active: bool
+        is_active: bool,
+        stake: Balance<SUI>
     }
 
     public struct Proposal has store, key {
@@ -90,6 +89,26 @@ module game::betting {
         validators: VecMap<address, Proposal>
     }
 
+    // For Emitting Events
+    public struct BetCreated has copy, drop {
+        bet: ID
+    }
+
+    public struct BetDeleted has copy, drop {
+        bet: ID
+    }
+
+    public struct BetAccepted has copy, drop {
+        bet: ID
+    }
+
+    public struct BetPaidOut has copy, drop {
+        bet: ID,
+        decision: bool
+    }
+
+    // Contract Functions
+
     // Called on contract initialization. Gives InitializationCap to caller.
     fun init(ctx: &mut TxContext) {
         let init_cap = InitializationCap {
@@ -107,7 +126,6 @@ module game::betting {
             funds: coin::into_balance(coin),
             approved_users: bag::new(ctx),
             all_queries: object_table::new<ID, Query>(ctx),
-            // all_bets: object_table::new<ID, Bet>(ctx),
             query_count: 0,
             num_to_query: table::new<u64, ID>(ctx),
             available_nums: table_vec::empty<u64>(ctx)
@@ -196,8 +214,6 @@ module game::betting {
         let amount_staked = coin::into_balance(coin);
         balance::join(&mut game_data.funds, amount_staked);
         
-        // always need 11 validators.
-        // can make this into a parameter set in game_data as well.
         if (query.validators.size() == VAL_SIZE) {
             let mut num_in_favor = 0;
 
@@ -228,6 +244,7 @@ module game::betting {
             // winners distribute it evenly. 
             // TODO: factor in some percentage of the bet as well (0.5%)?
             // TODO: floats not allowed in sui
+            // Note: with three validators, it will always work out.
             let amount_earned =  10 + (wrong_answers * 10) / right_answers;
 
             index = 0;
@@ -271,12 +288,14 @@ module game::betting {
         let creator_address = tx_context::sender(ctx);
         assert!(user_bet.value() == amount, EInvalidStakeSize);
         
-        // TODO: standardize 10 
-        // assert!(coin::value(&user_bet) == amount, EInsufficientBalance);
         let amount_staked = coin::into_balance(user_bet);
-        balance::join(&mut game_data.funds, amount_staked);
+
         let bet_uid = object::new(ctx);
         let bet_id = bet_uid.to_inner();
+
+        //we assume side of creator is whatever the String bet's phrase is
+            //example: bet String descriptions should 
+            //be phrased as "Eagles will win vs. the Seahawks today", then creator has side 'Eagles win'
         let new_bet = Bet {
             id: bet_uid,
             creator_address,
@@ -289,27 +308,28 @@ module game::betting {
             game_start_time,
             game_end_time,
             is_active: true, // Bet is active but not yet agreed upon
-            //we assume side of creator is whatever the String bet's phrase is
-            //example: bet String descriptions should 
-            //be phrased as "Eagles will win vs. the Seahawks today", then creator has side 'Eagles win'
+            stake: amount_staked
         };
 
         transfer::share_object(new_bet);
 
-        // TODO: emit an event that a bet has been created so that the front-end can list it.
+        event::emit(BetCreated {
+            bet: bet_id
+        });
+
         return bet_id
     }
-
+    
     // delete a bet if it;s not agreed upon
     public fun delete_bet(game_data: &mut GameData, mut bet: Bet, ctx: &mut TxContext) {
         let locked_funds = &mut game_data.funds;
-        // let mut bet = game_data.all_bets.borrow_mut(bet_id);
 
         assert!(bet.creator_address == ctx.sender(), ENotBetOwner);
         assert!(!bet.agreed_by_both, EBetAlreadyInProgress);
 
         // Withdraw staked amount from locked funds
-        let payout = coin::take<SUI>(locked_funds, bet.for_amount, ctx);
+        let payout_amount = bet.for_amount;
+        let payout = coin::take<SUI>(&mut bet.stake, payout_amount, ctx);
         transfer::public_transfer(payout, bet.creator_address);
 
         // Remove bet
@@ -326,10 +346,15 @@ module game::betting {
             game_start_time: _,
             game_end_time: _,
             is_active: _,
+            stake
         } = bet;
-        object::delete(id);
+        
+        stake.destroy_zero();
+        event::emit(BetDeleted {
+            bet: id.to_inner()
+        });
 
-        // TODO: emit an event that the bet has been deleted so that the front-end knows.
+        object::delete(id);
     }
 
     //second player in instantiated bet agrees to it here
@@ -347,24 +372,28 @@ module game::betting {
         assert!(coin.value() == bet.against_amount, EInvalidStakeSize);
 
         let betStake = coin::into_balance(coin);
-        balance::join(&mut game_data.funds, betStake);
+        // balance::join(&mut game_data.funds, betStake);
+        balance::join(&mut bet.stake, betStake);
         
         bet.agreed_by_both = true;
         bet.consenting_address = ctx.sender();
 
-        // TODO: emit an event so that the front-end knows
+        event::emit(BetAccepted {
+            bet: bet.bet_id
+        });
     }
 
     // handle expiration of a bet agreement window
     public fun handle_expired_bet(game_data: &mut GameData, mut bet: Bet, clock: &Clock, ctx: &mut TxContext) {
         let current_time = sui::clock::timestamp_ms(clock);
-        // assert!(game_data.all_bets.contains(bet_id), EBetNotFound);
-        // let mut bet = game_data.all_bets.borrow_mut(bet_id);
+
         assert!(bet.is_active, EBetNoLongerActive);
         assert!(current_time >= bet.game_end_time && !bet.agreed_by_both, EBetAlreadyInProgress);
 
         let locked_funds = &mut game_data.funds;
-        let payout = coin::take<SUI>(locked_funds, bet.for_amount, ctx);
+
+        let payout_amount = bet.for_amount;
+        let payout = coin::take<SUI>(&mut bet.stake, payout_amount, ctx);
         transfer::public_transfer(payout, bet.creator_address);
         bet.is_active = false;
         let Bet {
@@ -379,10 +408,16 @@ module game::betting {
             game_start_time: _,
             game_end_time: _,
             is_active: _,
+            stake
         } = bet;
-        object::delete(id);
+        
+        event::emit(BetDeleted {
+            bet: id.to_inner()
+        });
 
-        // TODO: emit an event so that the front end knows that the bet has been deleted.
+        stake.destroy_zero();
+
+        object::delete(id);
     }
 
     //after game end time, send bet to oracle for winner verification
@@ -405,10 +440,15 @@ module game::betting {
     fun process_oracle_answer(game_data: &mut GameData, bet: &mut Bet, oracle_answer: bool, ctx: &mut TxContext) {
         let winner_address = if (oracle_answer) { bet.creator_address } else { bet.consenting_address };
         let locked_funds = &mut game_data.funds;
-        let payout = coin::take<SUI>(locked_funds, bet.for_amount + bet.against_amount, ctx);
+        let payout = coin::take<SUI>(&mut bet.stake, bet.for_amount + bet.against_amount, ctx);
         transfer::public_transfer(payout, winner_address);
 
         bet.is_active = false;
+
+        event::emit(BetPaidOut {
+            bet: bet.bet_id,
+            decision: oracle_answer
+        });
     }
 
     // Accessors
