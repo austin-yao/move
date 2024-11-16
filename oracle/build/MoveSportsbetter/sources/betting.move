@@ -25,6 +25,7 @@ module game::betting {
     const EBetNoLongerActive: u64 = 18;
     const EBetNotYetInProgress: u64 = 19;
     const EQueryNotFound: u64 = 20;
+    const EInvalidStakeSize: u64 = 21;
 
     const VAL_SIZE: u64 = 3;
 
@@ -58,9 +59,9 @@ module game::betting {
         creator_address: address,
         consenting_address: address,
         question: String,
-        amount_staked_value: u64,
+        for_amount: u64,
         bet_id: ID,
-        odds: u64,
+        against_amount: u64,
         agreed_by_both: bool,
         //side of creator is the affirmative of whatever the bet says
         //ex: Eagles defeat Seahawks means instantiator is on Eagles win side
@@ -263,16 +264,16 @@ module game::betting {
 
     //create a new Bet object
     public fun create_bet(game_data: &mut GameData,
-        question: String, _amount: u64,
-        odds: u64, 
+        question: String, amount: u64,
+        against_amount: u64, 
         game_start_time: u64, game_end_time: u64, user_bet: Coin<SUI>, ctx: &mut TxContext
     ): ID {
         let creator_address = tx_context::sender(ctx);
+        assert!(user_bet.value() == amount, EInvalidStakeSize);
         
         // TODO: standardize 10 
         // assert!(coin::value(&user_bet) == amount, EInsufficientBalance);
         let amount_staked = coin::into_balance(user_bet);
-        let amount_staked_value = amount_staked.value();
         balance::join(&mut game_data.funds, amount_staked);
         let bet_uid = object::new(ctx);
         let bet_id = bet_uid.to_inner();
@@ -281,9 +282,9 @@ module game::betting {
             creator_address,
             consenting_address: @0x00,
             question,
-            amount_staked_value,
+            for_amount: amount,
             bet_id,
-            odds,
+            against_amount,
             agreed_by_both: false, // Initially false until second party agrees
             game_start_time,
             game_end_time,
@@ -308,7 +309,7 @@ module game::betting {
         assert!(!bet.agreed_by_both, EBetAlreadyInProgress);
 
         // Withdraw staked amount from locked funds
-        let payout = coin::take<SUI>(locked_funds, bet.amount_staked_value, ctx);
+        let payout = coin::take<SUI>(locked_funds, bet.for_amount, ctx);
         transfer::public_transfer(payout, bet.creator_address);
 
         // Remove bet
@@ -318,9 +319,9 @@ module game::betting {
             creator_address: _,
             consenting_address: _,
             question: _,
-            amount_staked_value: _,
+            for_amount: _,
             bet_id: _,
-            odds: _,
+            against_amount: _,
             agreed_by_both: _,
             game_start_time: _,
             game_end_time: _,
@@ -342,10 +343,11 @@ module game::betting {
         assert!(bet.is_active, EBetNoLongerActive); //402: Deprecated bet
         // TODO: add back times.
         // assert!(current_time < bet.game_start_time, 408); // 408: Request Timeout, the window for agreeing to the bet has passed
-        let bet_amount = coin.value();
+
+        assert!(coin.value() == bet.against_amount, EInvalidStakeSize);
+
         let betStake = coin::into_balance(coin);
         balance::join(&mut game_data.funds, betStake);
-        bet.amount_staked_value = bet.amount_staked_value + bet_amount;
         
         bet.agreed_by_both = true;
         bet.consenting_address = ctx.sender();
@@ -362,7 +364,7 @@ module game::betting {
         assert!(current_time >= bet.game_end_time && !bet.agreed_by_both, EBetAlreadyInProgress);
 
         let locked_funds = &mut game_data.funds;
-        let payout = coin::take<SUI>(locked_funds, bet.amount_staked_value, ctx);
+        let payout = coin::take<SUI>(locked_funds, bet.for_amount, ctx);
         transfer::public_transfer(payout, bet.creator_address);
         bet.is_active = false;
         let Bet {
@@ -370,9 +372,9 @@ module game::betting {
             creator_address: _,
             consenting_address: _,
             question: _,
-            amount_staked_value: _,
+            for_amount: _,
             bet_id: _,
-            odds: _,
+            against_amount: _,
             agreed_by_both: _,
             game_start_time: _,
             game_end_time: _,
@@ -403,7 +405,7 @@ module game::betting {
     fun process_oracle_answer(game_data: &mut GameData, bet: &mut Bet, oracle_answer: bool, ctx: &mut TxContext) {
         let winner_address = if (oracle_answer) { bet.creator_address } else { bet.consenting_address };
         let locked_funds = &mut game_data.funds;
-        let payout = coin::take<SUI>(locked_funds, bet.amount_staked_value, ctx);
+        let payout = coin::take<SUI>(locked_funds, bet.for_amount + bet.against_amount, ctx);
         transfer::public_transfer(payout, winner_address);
 
         bet.is_active = false;
@@ -422,8 +424,12 @@ module game::betting {
         bet.question
     }
 
-    public fun amount_staked(bet: &Bet): u64 {
-        bet.amount_staked_value
+    public fun for_amount(bet: &Bet): u64 {
+        bet.for_amount
+    }
+
+    public fun against_amount(bet: &Bet): u64 {
+        bet.against_amount
     }
 
     public fun agreed(bet: &Bet): bool {

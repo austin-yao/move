@@ -31,7 +31,7 @@ module game::oracle_tests {
             let mut game_data = scenario.take_shared<GameData>();
             let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
 
-            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 50, 50, 1, 10000, coin, scenario.ctx());
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, 1, 10000, coin, scenario.ctx());
 
             test_scenario::return_shared(game_data);
             bet_id
@@ -64,7 +64,7 @@ module game::oracle_tests {
             let mut game_data = scenario.take_shared<GameData>();
             let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
 
-            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 50, 50, 1, 10000, coin, scenario.ctx());
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, 1, 10000, coin, scenario.ctx());
             test_scenario::return_shared(game_data);
             bet_id
         };
@@ -96,7 +96,7 @@ module game::oracle_tests {
             let mut game_data = scenario.take_shared<GameData>();
             let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
 
-            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 50, 50, 1, 10000, coin, scenario.ctx());
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, 1, 10000, coin, scenario.ctx());
             test_scenario::return_shared(game_data);
             bet_id
         };
@@ -182,7 +182,7 @@ module game::oracle_tests {
             let mut game_data = scenario.take_shared<GameData>();
             let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
 
-            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 50, 50, 1, 10000, coin, scenario.ctx());
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, 1, 10000, coin, scenario.ctx());
             test_scenario::return_shared(game_data);
             bet_id
         };
@@ -228,7 +228,7 @@ module game::oracle_tests {
             let mut game_data = scenario.take_shared<GameData>();
             let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
 
-            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 50, 50, 1, 10000, coin, scenario.ctx());
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, 1, 10000, coin, scenario.ctx());
             test_scenario::return_shared(game_data);
             bet_id
         };
@@ -484,7 +484,7 @@ module game::oracle_tests {
             let mut game_data = scenario.take_shared<GameData>();
             let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
 
-            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 50, 50, 1, 10000, coin, scenario.ctx());
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, 1, 10000, coin, scenario.ctx());
             test_scenario::return_shared(game_data);
             bet_id
         };
