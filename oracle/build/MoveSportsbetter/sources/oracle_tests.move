@@ -5,7 +5,7 @@ module game::oracle_tests {
     use sui::sui::SUI;
     use sui::test_scenario::{Self, Scenario};
 
-    use game::betting::{Self, InitializationCap, GameData, Bet, Proposal, Query};
+    use game::betting::{Self, InitializationCap, GameData, Bet, Proposal};
 
     // Tests
     #[test]
@@ -39,7 +39,7 @@ module game::oracle_tests {
         };
         scenario.next_tx(admin);
         {
-            let mut game_data = scenario.take_shared<GameData>();
+            let game_data = scenario.take_shared<GameData>();
             let bet = scenario.take_shared_by_id<Bet>(bet_id);
             assert!(bet.creator() == admin, 1);
             assert!(bet.question() == b"Does this work?".to_string(), 2);
@@ -156,8 +156,8 @@ module game::oracle_tests {
 
         scenario.next_tx(admin);
         {
-            let mut game_data = scenario.take_shared<GameData>();
-            let mut bet = scenario.take_shared_by_id<Bet>(bet_id);
+            let game_data = scenario.take_shared<GameData>();
+            let bet = scenario.take_shared_by_id<Bet>(bet_id);
 
             assert!(bet.creator() == p1, 1);
             assert!(bet.consentor() == p2, 2);
@@ -349,6 +349,98 @@ module game::oracle_tests {
 
             test_scenario::return_shared(game_data);
             transfer::public_transfer(proposal, prop_player);
+        };
+
+        scenario.end();
+    }
+
+    #[test]
+    #[expected_failure(abort_code = test_scenario::EEmptyInventory)]
+    fun test_query_proposal_submission_size_one() {
+        let admin = @0xAD;
+        let p1 = @0xF1;
+        let p2 = @0xF2;
+        let prop_player = @0xF3;
+
+        let mut scenario = test_scenario::begin(prop_player);
+
+        scenario.initialize_contract_for_test(admin);
+
+        // Step 2: Accepting the bet
+        scenario.next_tx(p1);
+        let bet_id = {
+            let mut game_data = scenario.take_shared<GameData>();
+            let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
+
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 50, 50, 1, 10000, coin, scenario.ctx());
+            test_scenario::return_shared(game_data);
+            bet_id
+        };
+
+        scenario.next_tx(p2);
+        {
+            let mut game_data = scenario.take_shared<GameData>();
+            let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
+            let mut bet = scenario.take_shared_by_id<Bet>(bet_id);
+            
+            betting::agree_to_bet(&mut game_data, &mut bet, coin, scenario.ctx());
+            test_scenario::return_shared(game_data);
+            test_scenario::return_shared(bet);
+        };
+
+        // Step 3: Sending the bet to the oracle
+        scenario.next_tx(p1);
+        {
+            let mut game_data = scenario.take_shared<GameData>();
+            let mut bet = scenario.take_shared_by_id<Bet>(bet_id);
+            betting::send_bet_to_oracle(&mut game_data, &mut bet, scenario.ctx());
+
+            test_scenario::return_shared(game_data);
+            test_scenario::return_shared(bet);
+        };
+        
+        // Step 4: Requesting a bet to validate
+        scenario.next_tx(prop_player);
+        {
+            let mut game_data = scenario.take_shared<GameData>();
+            let proposal: Proposal = betting::requestValidate(&mut game_data, scenario.ctx());
+            assert!(proposal.oracleId() == bet_id, 1);
+            assert!(proposal.proposer() == prop_player, 3);
+
+            test_scenario::return_shared(game_data);
+            transfer::public_transfer(proposal, prop_player);
+        };
+
+        // Step 5: 
+        scenario.next_tx(prop_player);
+        {
+            let mut game_data = scenario.take_shared<GameData>();
+            let proposal: Proposal = scenario.take_from_sender<Proposal>();
+            let mut bet = scenario.take_shared_by_id<Bet>(bet_id);
+            let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
+
+            betting::receiveValidate(&mut game_data, &mut bet, proposal, true, coin, scenario.ctx());
+
+            test_scenario::return_shared(game_data);
+            test_scenario::return_shared(bet);
+        };
+
+        // Step 6: Check that the proposers and winner of the contract is paid out.
+        scenario.next_tx(prop_player);
+        {
+            let received_coin = scenario.take_from_sender<Coin<SUI>>();
+            assert!(received_coin.value() == 10, 2);
+
+            test_scenario::return_to_sender(&scenario, received_coin);
+
+            let winnings = scenario.take_from_address<Coin<SUI>>(p1);
+            assert!(winnings.value() == 20, 4);
+
+            let losings = scenario.take_from_address<Coin<SUI>>(p2);
+            assert!(losings.value() == 0, 5);
+
+            test_scenario::return_to_address(p1, winnings);
+            test_scenario::return_to_address(p2, losings);
         };
 
         scenario.end();
