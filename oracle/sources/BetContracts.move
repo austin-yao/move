@@ -10,9 +10,8 @@ module game::betting {
     use sui::object_table::{Self, ObjectTable};
     use sui::table_vec::{Self, TableVec};
     use sui::event;
-    use sui::random::{Self, Random, RandomGenerator};
+    use sui::random::{Random};
 
-    const EInsufficientBalance: u64 = 10;
     const ENoQueryToValidate: u64 = 11;
     const ECallerNotInstantiator: u64 = 13;
     const EValidationError: u64 = 14;
@@ -23,6 +22,8 @@ module game::betting {
     const EBetNotYetInProgress: u64 = 19;
     const EQueryNotFound: u64 = 20;
     const EInvalidStakeSize: u64 = 21;
+    const EInvalidProposalForBet: u64 = 22;
+    const EEndTimeBeforeStartTime: u64 = 23;
 
     const VAL_SIZE: u64 = 3;
 
@@ -155,7 +156,7 @@ module game::betting {
         };
 
         let temp = new_query.id.to_inner();
-        let mut index = 0;
+        let index;
         if (game_data.available_nums.length() == 0) {
             // increment query_count
             game_data.query_count = game_data.query_count + 1;
@@ -184,12 +185,12 @@ module game::betting {
         assert!(game_data.query_count != 0, ENoQueryToValidate);
 
         let mut generator = r.new_generator(ctx);
-        
+
         while (turn < 5) {
             i = generator.generate_u64_in_range(1, game_data.query_count);
             if (!game_data.num_to_query.contains(i)) {
                 turn = turn + 1;
-                continue;
+                continue 
             };
 
             let query_id = game_data.num_to_query.borrow(i);
@@ -230,6 +231,7 @@ module game::betting {
         assert!(bet.is_active, EBetNoLongerActive);
         assert!(bet.agreed_by_both, EBetNotYetInProgress);
         assert!(game_data.all_queries.contains(prop.query_id), EQueryNotFound);
+        assert!(prop.oracleId == bet.bet_id, EInvalidProposalForBet);
 
         let mut query = game_data.all_queries.borrow_mut(prop.query_id);
 
@@ -298,7 +300,6 @@ module game::betting {
             };
 
             balance.destroy_zero();
-            let size: u64 = game_data.num_to_query.length();
             game_data.num_to_query.remove(index);
             game_data.available_nums.push_back(index);
 
@@ -313,12 +314,15 @@ module game::betting {
     //create a new Bet object
     public fun create_bet(game_data: &mut GameData,
         question: String, amount: u64,
-        against_amount: u64, 
-        game_start_time: u64, game_end_time: u64, user_bet: Coin<SUI>, ctx: &mut TxContext
+        against_amount: u64, game_end_time: u64, user_bet: Coin<SUI>, clock: &Clock, ctx: &mut TxContext
     ): ID {
         let creator_address = tx_context::sender(ctx);
         assert!(user_bet.value() == amount, EInvalidStakeSize);
         
+        let current_time = clock.timestamp_ms();
+
+        assert!(game_end_time > current_time, EEndTimeBeforeStartTime);
+
         let amount_staked = coin::into_balance(user_bet);
 
         let bet_uid = object::new(ctx);
@@ -336,7 +340,7 @@ module game::betting {
             bet_id,
             against_amount,
             agreed_by_both: false, // Initially false until second party agrees
-            game_start_time,
+            game_start_time: current_time,
             game_end_time,
             is_active: true, // Bet is active but not yet agreed upon
             stake: amount_staked
@@ -387,16 +391,14 @@ module game::betting {
     }
 
     //second player in instantiated bet agrees to it here
-    // TODO: add in times back later.
-    public fun agree_to_bet(game_data: &mut GameData, bet: &mut Bet, coin: Coin<SUI>, ctx: &mut TxContext) {
-        // let current_time = clock::timestamp_ms(clock);
+    public fun agree_to_bet(game_data: &mut GameData, bet: &mut Bet, coin: Coin<SUI>, clock: &Clock, ctx: &mut TxContext) {
+        let current_time = clock.timestamp_ms();
 
         //caller is consenting address and bet is not already agreed to
-        assert!(bet.creator_address != ctx.sender(), ENotBetOwner); // 403: Forbidden, not consenting address
-        assert!(!bet.agreed_by_both, EBetAlreadyInProgress); // 400: Bad Request, bet already agreed upon
-        assert!(bet.is_active, EBetNoLongerActive); //402: Deprecated bet
-        // TODO: add back times.
-        // assert!(current_time < bet.game_start_time, 408); // 408: Request Timeout, the window for agreeing to the bet has passed
+        assert!(bet.creator_address != ctx.sender(), ENotBetOwner); 
+        assert!(!bet.agreed_by_both, EBetAlreadyInProgress); 
+        assert!(bet.is_active, EBetNoLongerActive); 
+        assert!(current_time <= bet.game_end_time, EBetNoLongerActive); 
 
         assert!(coin.value() == bet.against_amount, EInvalidStakeSize);
 
@@ -413,10 +415,10 @@ module game::betting {
 
     // handle expiration of a bet agreement window
     public fun handle_expired_bet(game_data: &mut GameData, mut bet: Bet, clock: &Clock, ctx: &mut TxContext) {
-        let current_time = sui::clock::timestamp_ms(clock);
+        let current_time = clock.timestamp_ms();
 
         assert!(bet.is_active, EBetNoLongerActive);
-        assert!(current_time >= bet.game_end_time && !bet.agreed_by_both, EBetAlreadyInProgress);
+        assert!(current_time > bet.game_end_time && !bet.agreed_by_both, EBetAlreadyInProgress);
 
         let payout_amount = bet.for_amount;
         let payout = coin::take<SUI>(&mut bet.stake, payout_amount, ctx);
@@ -447,17 +449,12 @@ module game::betting {
     }
 
     //after game end time, send bet to oracle for winner verification
-    public fun send_bet_to_oracle(game_data: &mut GameData, bet: &mut Bet, ctx: &mut TxContext) {
+    public fun send_bet_to_oracle(game_data: &mut GameData, bet: &mut Bet, clock: &Clock, ctx: &mut TxContext) {
         assert!(bet.is_active, EBetNoLongerActive);
         assert!(bet.agreed_by_both, EBetNotYetInProgress);
 
-        // TODO: add clock back in
-        // let current_time = clock::timestamp_ms(clock);
-
-        //Only correct creator/second party can call this, and after bet end time
-        // assert!((ctx.sender() == bet.creator_address || ctx.sender() == bet.consenting_address) &&
-        //         current_time > bet.game_end_time, 403);
-        assert!((ctx.sender() == bet.creator_address || ctx.sender() == bet.consenting_address), 403);
+        let current_time = clock.timestamp_ms();
+        assert!(current_time > bet.game_end_time, EBetNotYetInProgress);
 
         receiveQuery(game_data, bet, ctx);
     }
