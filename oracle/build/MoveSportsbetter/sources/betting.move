@@ -1,6 +1,6 @@
 module game::betting {
     use sui::coin::{Coin, Self};
-    use sui::clock::{Self, Clock};
+    use sui::clock::{Clock};
     use std::string::String;
     use sui::sui::SUI;
     use sui::balance::{Self, Balance};
@@ -10,6 +10,7 @@ module game::betting {
     use sui::object_table::{Self, ObjectTable};
     use sui::table_vec::{Self, TableVec};
     use sui::event;
+    use sui::random::{Self, Random, RandomGenerator};
     
     // TODO: for randomization, we can make a mapping from 
     // number to ID, choose a random number and use that ID.
@@ -45,7 +46,6 @@ module game::betting {
         funds: Balance<SUI>,
         approved_users: Bag,
         all_queries: ObjectTable<ID, Query>,
-        // all_bets: ObjectTable<ID, Bet>,
         query_count: u64,
         num_to_query: Table<u64, ID>,
         available_nums: TableVec<u64>
@@ -80,14 +80,12 @@ module game::betting {
     }
 
     public struct Query has store, key {
-        // p1: address,
-        // p2: address,
         id: UID,
         betId: ID,
         question: String, 
-        // change validators into a mapping from sender to proposal
         validators: VecMap<address, Proposal>,
-        balance: Balance<SUI>
+        balance: Balance<SUI>,
+        index: u64
     }
 
     // For Emitting Events
@@ -140,6 +138,7 @@ module game::betting {
         transfer::share_object(game_data);
     }
 
+    // TODO: Take a flat fee of every bet so that total_balance actually grows
     public fun withdraw(game_data: &mut GameData, ctx: &mut TxContext) {
         assert!(ctx.sender() == game_data.owner, ECallerNotInstantiator);
         let total_balance = game_data.funds.value();
@@ -152,42 +151,73 @@ module game::betting {
         called by the application to send a query up for betting
     */
     fun receiveQuery(game_data: &mut GameData, bet: &Bet, ctx: &mut TxContext) {
-        // access the vector of queries
-        let new_query = Query {
+        let mut new_query = Query {
             id: object::new(ctx),
             betId: bet.bet_id,
             question: bet.question,
             validators: vec_map::empty<address, Proposal>(),
-            balance: balance::zero<SUI>()
+            balance: balance::zero<SUI>(),
+            index: 0
         };
+
         let temp = new_query.id.to_inner();
-        game_data.all_queries.add(temp, new_query);
+        let mut index = 0;
         if (game_data.available_nums.length() == 0) {
             // increment query_count
-           game_data.query_count = game_data.query_count + 1;
+            game_data.query_count = game_data.query_count + 1;
             game_data.num_to_query.add(game_data.query_count, temp);
+            index = game_data.query_count;
         } else {
-            let _count = game_data.available_nums.pop_back();
-            game_data.num_to_query.add(game_data.query_count, temp);
+            // want to keep a vector of available_nums
+            let count = game_data.available_nums.pop_back();
+            game_data.num_to_query.add(count, temp);
+            index = count;
         };
+
+        new_query.index = index;
+
+        game_data.all_queries.add(temp, new_query);
     }
     
-    public fun requestValidate(game_data: &mut GameData, ctx: &mut TxContext): Proposal {
+    // Make sure you cannot call from another module
+    entry fun requestValidate(game_data: &mut GameData, r: &Random, ctx: &mut TxContext): (ID, ID) {
         // TODO: introduce randomness. For now, only choose the first available one
         let mut i = 1;
+        // You get five turns to try to find a suitable query.
+        let mut turn = 0;
         let sender = tx_context::sender(ctx);
         let proposal: Proposal;
-        while (i <= game_data.query_count) {
+
+        assert!(game_data.query_count != 0, ENoQueryToValidate);
+        // while (i <= game_data.query_count) {
+        //     let query_id = game_data.num_to_query.borrow(i);
+        //     let query = game_data.all_queries.borrow(*query_id);
+        //     if (query.validators.contains(&sender)) {
+        //         i = i + 1;
+        //         continue
+        //     } else {
+        //         break
+        //     }
+        // };
+        let mut generator = r.new_generator(ctx);
+        while (turn < 5) {
+            i = generator.generate_u64_in_range(1, game_data.query_count);
+            if (!game_data.num_to_query.contains(i)) {
+                turn = turn + 1;
+                continue;
+            };
+
             let query_id = game_data.num_to_query.borrow(i);
             let query = game_data.all_queries.borrow(*query_id);
             if (query.validators.contains(&sender)) {
-                i = i + 1;
+                turn = turn + 1;
                 continue
             } else {
                 break
             }
         };
 
+        assert!(turn < 5, ENoQueryToValidate);
         assert!(i <= game_data.query_count, ENoQueryToValidate);
 
         let query_id = game_data.num_to_query.borrow(i);
@@ -200,7 +230,11 @@ module game::betting {
             response: false,
             query_id: *query_id
         };
-        proposal
+        let prop_id = proposal.id.to_inner();
+        let bet_id = proposal.oracleId;
+        transfer::public_transfer(proposal, sender);
+
+        (prop_id, bet_id)
     }
 
     public fun receiveValidate(game_data: &mut GameData, bet: &mut Bet, mut prop: Proposal, response: bool, coin: Coin<SUI>, ctx: &mut TxContext) {
@@ -228,15 +262,15 @@ module game::betting {
 
             // deconstruct the query
             let actual_query = game_data.all_queries.remove(prop_query_id);
-            let Query {id, betId: _, question: _, validators, mut balance} = move actual_query;
+            let Query {id, betId: _, question: _, validators, mut balance, index} = move actual_query;
             let (_vals, mut props) : (vector<address>, vector<Proposal>) = validators.into_keys_values();
-            let mut index = 0;
-            while (index < VAL_SIZE) {
-                let proposal = props.borrow(index);
+            let mut i = 0;
+            while (i < VAL_SIZE) {
+                let proposal = props.borrow(i);
                 if (proposal.response) {
                     num_in_favor = num_in_favor + 1;
                 };
-                index = index + 1;
+                i = i + 1;
             };
             let wrong_answers;
             let majority = VAL_SIZE / 2;
@@ -251,13 +285,11 @@ module game::betting {
             // say arbitrarily that everyone puts in 10 sui to query
             // total is 110 sui
             // winners distribute it evenly. 
-            // TODO: factor in some percentage of the bet as well (0.5%)?
-            // TODO: floats not allowed in sui
-            // Note: with three validators, it will always work out.
+            // Note: with three validators, it will always work out, but otherwise, floats will not work.
             let amount_earned =  10 + (wrong_answers * 10) / right_answers;
 
-            index = 0;
-            while (index < VAL_SIZE) {
+            i = 0;
+            while (i < VAL_SIZE) {
                 let proposal = props.remove(0);
                 // check to see if they got the correct answer, if so, then initiate a transfer
                 if ((proposal.response && num_in_favor > majority) || (!proposal.response && num_in_favor <= majority)) {
@@ -266,7 +298,7 @@ module game::betting {
 
                     transfer::public_transfer(payout, proposal.proposer);
                 };
-                index = index + 1;
+                i = i + 1;
 
                 // delete the proposal
                 let Proposal {id, proposer: _, oracleId: _, question: _, response: _, query_id: _} = proposal;
@@ -281,6 +313,9 @@ module game::betting {
             };
 
             balance.destroy_zero();
+            let size: u64 = game_data.num_to_query.length();
+            game_data.num_to_query.remove(index);
+            game_data.available_nums.push_back(index);
 
             // cleanup
             id.delete();

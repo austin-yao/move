@@ -4,13 +4,14 @@ module game::oracle_tests {
     use sui::coin::{Coin, Self};
     use sui::sui::SUI;
     use sui::test_scenario::{Self, Scenario};
+    use sui::random::{Self, Random};
 
     use game::betting::{Self, InitializationCap, GameData, Bet, Proposal};
 
     // Tests
     #[test]
     fun test_initialize_contract() {
-        let admin = @0xAD;
+        let admin = @0x0;
         let mut scenario = test_scenario::begin(admin);
         
         scenario.initialize_contract_for_test(admin);
@@ -20,7 +21,7 @@ module game::oracle_tests {
 
     #[test]
     fun test_create_bet() {
-        let admin = @0xAD;
+        let admin = @0x0;
 
         let mut scenario = test_scenario::begin(admin);
 
@@ -52,7 +53,7 @@ module game::oracle_tests {
 
     #[test]
     fun test_delete_bet() {
-        let admin = @0xAD;
+        let admin = @0x0;
 
         let mut scenario = test_scenario::begin(admin);
 
@@ -84,7 +85,7 @@ module game::oracle_tests {
     #[test]
     #[expected_failure(abort_code = 4)]
     fun test_delete_bet_twice() {
-        let admin = @0xAD;
+        let admin = @0x0;
 
         let mut scenario = test_scenario::begin(admin);
 
@@ -124,7 +125,7 @@ module game::oracle_tests {
 
     #[test]
     fun test_accept_bet() {
-        let admin = @0xAD;
+        let admin = @0x0;
         let p1 = @0xF1;
         let p2 = @0xF2;
 
@@ -154,7 +155,7 @@ module game::oracle_tests {
     #[test]
     #[expected_failure(abort_code = betting::ENotBetOwner)]
     fun test_accepting_own_bet() {
-        let admin = @0xAD;
+        let admin = @0x0;
 
         let mut scenario = test_scenario::begin(admin);
 
@@ -168,7 +169,7 @@ module game::oracle_tests {
     #[test]
     #[expected_failure(abort_code = betting::EBetAlreadyInProgress)]
     fun test_agree_to_agreed_bet() {
-        let admin = @0xAD;
+        let admin = @0x0;
         let p1 = @0xF1;
         let p2 = @0xF2;
 
@@ -215,7 +216,7 @@ module game::oracle_tests {
     #[test]
     #[expected_failure(abort_code = 4)]
     fun test_agree_to_canceled_bet() {
-        let admin = @0xAD;
+        let admin = @0x0;
         let p1 = @0xF1;
 
         let mut scenario = test_scenario::begin(admin);
@@ -258,7 +259,7 @@ module game::oracle_tests {
 
     #[test]
     fun test_query_proposal() {
-        let admin = @0xAD;
+        let admin = @0x0;
         let p1 = @0xF1;
         let p2 = @0xF2;
         let prop_player = @0xF3;
@@ -275,98 +276,57 @@ module game::oracle_tests {
         scenario.next_tx(prop_player);
         {
             let mut game_data = scenario.take_shared<GameData>();
-            let proposal: Proposal = betting::requestValidate(&mut game_data, scenario.ctx());
-            assert!(proposal.oracleId() == bet_id, 1);
+            let random = scenario.take_shared<Random>();
+            betting::requestValidate(&mut game_data, &random, scenario.ctx());
 
             test_scenario::return_shared(game_data);
-            transfer::public_transfer(proposal, prop_player);
+            test_scenario::return_shared(random);
         };
 
         scenario.end();
     }
 
-    // #[test]
-    // #[expected_failure(abort_code = test_scenario::EEmptyInventory)]
-    // fun test_payout_bet_size_one() {
-    //     let admin = @0xAD;
-    //     let p1 = @0xF1;
-    //     let p2 = @0xF2;
-    //     let prop_player = @0xF3;
+    #[test]
+    #[expected_failure(abort_code = betting::ENoQueryToValidate)]
+    fun test_no_query_to_accept() {
+        let admin = @0x0;
+        let prop_player = @0xF3;
 
-    //     let mut scenario = test_scenario::begin(prop_player);
+        let mut scenario = test_scenario::begin(admin);
 
-    //     scenario.initialize_contract_for_test(admin);
+        scenario.initialize_contract_for_test(admin);
 
-    //     let bet_id = scenario.create_and_accept_bet_for_test(p1, p2);
+        scenario.request_and_submit_proposal_for_test(prop_player, true);
 
-    //     scenario.send_bet_to_oracle_for_test(bet_id, p1);
-        
-    //     scenario.request_and_submit_proposal_for_test(prop_player, true);
+        scenario.end();
+    }
 
-    //     // Check that the proposers and winner of the contract is paid out.
-    //     scenario.next_tx(prop_player);
-    //     {
-    //         let received_coin = scenario.take_from_sender<Coin<SUI>>();
-    //         assert!(received_coin.value() == 10, 2);
+    #[test]
+    #[expected_failure(abort_code = betting::ENoQueryToValidate)]
+    fun test_already_proposed_only_query() {
+        let admin = @0x0;
+        let p1 = @0xF1;
+        let p2 = @0xF2;
 
-    //         test_scenario::return_to_sender(&scenario, received_coin);
+        let prop1 = @0xB1;
 
-    //         let winnings = scenario.take_from_address<Coin<SUI>>(p1);
-    //         assert!(winnings.value() == 20, 4);
+        let mut scenario = test_scenario::begin(admin);
 
-    //         let losings = scenario.take_from_address<Coin<SUI>>(p2);
-    //         assert!(losings.value() == 0, 5);
+        scenario.initialize_contract_for_test(admin);
 
-    //         test_scenario::return_to_address(p1, winnings);
-    //         test_scenario::return_to_address(p2, losings);
-    //     };
+        let bet_id = scenario.create_and_accept_bet_for_test(p1, p2);
+        scenario.send_bet_to_oracle_for_test(bet_id, p1);
 
-    //     scenario.end();
-    // }
+        scenario.request_and_submit_proposal_for_test(prop1, true);
+        scenario.request_and_submit_proposal_for_test(prop1, true);
 
-    // #[test]
-    // #[expected_failure(abort_code = test_scenario::EEmptyInventory)]
-    // fun test_payout_bet_false_response_size_one() {
-    //     let admin = @0xAD;
-    //     let p1 = @0xF1;
-    //     let p2 = @0xF2;
-    //     let prop_player = @0xF3;
-
-    //     let mut scenario = test_scenario::begin(prop_player);
-
-    //     scenario.initialize_contract_for_test(admin);
-
-    //     let bet_id = scenario.create_and_accept_bet_for_test(p1, p2);
-
-    //     scenario.send_bet_to_oracle_for_test(bet_id, p1);
-        
-    //     scenario.request_and_submit_proposal_for_test(prop_player, false);
-
-    //     // Check that the proposers and winner of the contract is paid out.
-    //     scenario.next_tx(prop_player);
-    //     {
-    //         let received_coin = scenario.take_from_sender<Coin<SUI>>();
-    //         assert!(received_coin.value() == 10, 2);
-
-    //         test_scenario::return_to_sender(&scenario, received_coin);
-
-    //         let winnings = scenario.take_from_address<Coin<SUI>>(p2);
-    //         assert!(winnings.value() == 20, 4);
-
-    //         let losings = scenario.take_from_address<Coin<SUI>>(p1);
-    //         assert!(losings.value() == 0, 5);
-
-    //         test_scenario::return_to_address(p1, winnings);
-    //         test_scenario::return_to_address(p2, losings);
-    //     };
-
-    //     scenario.end();
-    // }
+        scenario.end();
+    }
 
     #[test]
     #[expected_failure(abort_code = test_scenario::EEmptyInventory)]
     fun test_payout_bet_size_three() {
-        let admin = @0xAD;
+        let admin = @0x0;
         let p1 = @0xF1;
         let p2 = @0xF2;
 
@@ -410,7 +370,7 @@ module game::oracle_tests {
 
     #[test]
     fun test_payout_bet_false_response_size_three() {
-        let admin = @0xAD;
+        let admin = @0x0;
         let p1 = @0xF1;
         let p2 = @0xF2;
 
@@ -465,6 +425,7 @@ module game::oracle_tests {
         scenario.next_tx(admin);
         {
             betting::get_and_transfer_initialization_cap_for_testing(scenario.ctx());
+            random::create_for_testing(scenario.ctx());
         };
 
         scenario.next_tx(admin);
@@ -524,12 +485,12 @@ module game::oracle_tests {
         scenario.next_tx(prop_player);
         let bet_id = {
             let mut game_data = scenario.take_shared<GameData>();
-            let proposal: Proposal = betting::requestValidate(&mut game_data, scenario.ctx());
-            let id = proposal.oracleId();
+            let random = scenario.take_shared<Random>();
+            let (prop_id, bet_id): (ID, ID) = betting::requestValidate(&mut game_data, &random, scenario.ctx());
             test_scenario::return_shared(game_data);
-            transfer::public_transfer(proposal, prop_player);
+            test_scenario::return_shared(random);
 
-            id
+            bet_id
         };
 
         // Step 5: 
