@@ -80,6 +80,8 @@ module game::betting {
         id: UID,
         betId: ID,
         question: String, 
+        creator_address: address,
+        consenting_address: address,
         validators: VecMap<address, Proposal>,
         balance: Balance<SUI>,
         index: u64
@@ -150,6 +152,8 @@ module game::betting {
             id: object::new(ctx),
             betId: bet.bet_id,
             question: bet.question,
+            creator_address: bet.creator_address,
+            consenting_address: bet.consenting_address,
             validators: vec_map::empty<address, Proposal>(),
             balance: balance::zero<SUI>(),
             index: 0
@@ -192,10 +196,9 @@ module game::betting {
                 turn = turn + 1;
                 continue 
             };
-
             let query_id = game_data.num_to_query.borrow(i);
             let query = game_data.all_queries.borrow(*query_id);
-            if (query.validators.contains(&sender)) {
+            if (query.validators.contains(&sender) || query.consenting_address == sender || query.creator_address == sender) {
                 turn = turn + 1;
                 continue
             } else {
@@ -249,7 +252,7 @@ module game::betting {
 
             // deconstruct the query
             let actual_query = game_data.all_queries.remove(prop_query_id);
-            let Query {id, betId: _, question: _, validators, mut balance, index} = move actual_query;
+            let Query {id, betId: _, question: _, creator_address: _, consenting_address: _, validators, mut balance, index} = move actual_query;
             let (_vals, mut props) : (vector<address>, vector<Proposal>) = validators.into_keys_values();
             let mut i = 0;
             while (i < VAL_SIZE) {
