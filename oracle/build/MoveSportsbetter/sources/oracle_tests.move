@@ -55,6 +55,69 @@ module game::oracle_tests {
     }
 
     #[test]
+    #[expected_failure(abort_code = betting::EEndTimeBeforeStartTime)]
+    fun test_propose_bet_after_end_time() {
+        let admin = @0x0;
+        let p1 = @0xF1;
+
+        let mut scenario = test_scenario::begin(admin);
+
+        scenario.initialize_contract_for_test(admin);
+
+        scenario.next_tx(p1);
+        {
+            let mut clock = scenario.take_shared<Clock>();
+
+            clock.increment_for_testing(2);
+
+            test_scenario::return_shared(clock);
+        };
+
+        scenario.next_tx(p1);
+        let _bet_id = {
+            let mut game_data = scenario.take_shared<GameData>();
+            let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
+            let mut clock = scenario.take_shared<Clock>();
+
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, 1, coin, &clock, scenario.ctx());
+
+            clock.increment_for_testing(2);
+
+            test_scenario::return_shared(game_data);
+            test_scenario::return_shared(clock);
+            bet_id
+        };
+
+        scenario.end();
+    }
+
+    #[test]
+    #[expected_failure(abort_code = betting::EInvalidStakeSize)]
+    fun test_propose_bet_invalid_stake_size() {
+        let admin = @0x0;
+        let p1 = @0xF1;
+
+        let mut scenario = test_scenario::begin(admin);
+
+        scenario.initialize_contract_for_test(admin);
+
+        scenario.next_tx(p1);
+        let _bet_id = {
+            let mut game_data = scenario.take_shared<GameData>();
+            let coin = coin::mint_for_testing<SUI>(12, scenario.ctx());
+            let clock = scenario.take_shared<Clock>();
+
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, 1, coin, &clock, scenario.ctx());
+
+            test_scenario::return_shared(game_data);
+            test_scenario::return_shared(clock);
+            bet_id
+        };
+
+        scenario.end();
+    }
+
+    #[test]
     fun test_delete_bet() {
         let admin = @0x0;
 
@@ -88,7 +151,7 @@ module game::oracle_tests {
     }
 
     #[test]
-    #[expected_failure(abort_code = 4)]
+    #[expected_failure(abort_code = test_scenario::EObjectNotFound)]
     fun test_delete_bet_twice() {
         let admin = @0x0;
 
@@ -131,7 +194,66 @@ module game::oracle_tests {
     }
 
     #[test]
-    fun test_accept_bet() {
+    #[expected_failure(abort_code = betting::ENotBetOwner)]
+    public fun test_delete_bet_not_owner() {
+        let admin = @0x0;
+        let p1 = @0xF1;
+
+        let mut scenario = test_scenario::begin(admin);
+
+        scenario.initialize_contract_for_test(admin);
+
+        // Step 1: creating the bet
+        scenario.next_tx(admin);
+        let bet_id = {
+            let mut game_data = scenario.take_shared<GameData>();
+            let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
+            let clock = scenario.take_shared<Clock>();
+
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, 1, coin, &clock, scenario.ctx());
+            test_scenario::return_shared(game_data);
+            test_scenario::return_shared(clock);
+            bet_id
+        };
+
+        // Step 2: deleting the bet
+        scenario.next_tx(p1);
+        {
+            let mut game_data = scenario.take_shared<GameData>();
+            let bet = scenario.take_shared_by_id<Bet>(bet_id);
+            betting::delete_bet(&mut game_data, bet, scenario.ctx());
+            test_scenario::return_shared(game_data);
+        };
+
+        scenario.end();
+    }
+
+    #[test]
+    #[expected_failure(abort_code = betting::EBetAlreadyInProgress)]
+    public fun test_delete_agreed_bet() {
+        let admin = @0x0;
+        let p1 = @0xF1;
+        let p2 = @0xF2;
+
+        let mut scenario = test_scenario::begin(admin);
+
+        scenario.initialize_contract_for_test(admin);
+
+        let bet_id = scenario.create_and_accept_bet_for_test(p1, p2);
+
+        scenario.next_tx(p1);
+        {
+            let mut game_data = scenario.take_shared<GameData>();
+            let bet = scenario.take_shared_by_id<Bet>(bet_id);
+            betting::delete_bet(&mut game_data, bet, scenario.ctx());
+            test_scenario::return_shared(game_data);
+        };
+
+        scenario.end();
+    }
+
+    #[test]
+    fun test_agree_bet() {
         let admin = @0x0;
         let p1 = @0xF1;
         let p2 = @0xF2;
@@ -161,7 +283,7 @@ module game::oracle_tests {
 
     #[test]
     #[expected_failure(abort_code = betting::ENotBetOwner)]
-    fun test_accepting_own_bet() {
+    fun test_agree_own_bet() {
         let admin = @0x0;
 
         let mut scenario = test_scenario::begin(admin);
@@ -230,8 +352,77 @@ module game::oracle_tests {
     }
 
     #[test]
-    #[expected_failure(abort_code = 4)]
-    fun test_agree_to_canceled_bet() {
+    #[expected_failure(abort_code = betting::EBetNoLongerActive)]
+    fun test_agree_to_bet_after_end() {
+        let admin = @0x0;
+        let p1 = @0xF1;
+        let p2 = @0xF2;
+
+        let mut scenario = test_scenario::begin(admin);
+        
+        scenario.initialize_contract_for_test(admin);
+
+        scenario.next_tx(p1);
+        let bet_id = {
+            let mut game_data = scenario.take_shared<GameData>();
+            let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
+            let mut clock = scenario.take_shared<Clock>();
+
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, 1, coin, &clock, scenario.ctx());
+
+            clock.increment_for_testing(2);
+
+            test_scenario::return_shared(game_data);
+            test_scenario::return_shared(clock);
+            bet_id
+        };
+
+        scenario.next_tx(p2);
+        {
+            let mut game_data = scenario.take_shared<GameData>();
+            let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
+            let mut bet = scenario.take_shared_by_id<Bet>(bet_id);
+            let mut clock = scenario.take_shared<Clock>();
+            
+            betting::agree_to_bet(&mut game_data, &mut bet, coin, &clock, scenario.ctx());
+            
+            test_scenario::return_shared(game_data);
+            test_scenario::return_shared(clock);
+            test_scenario::return_shared(bet);
+        };
+
+        scenario.end();
+    }
+
+    #[test]
+    #[expected_failure(abort_code = betting::EInvalidStakeSize)]
+    fun test_agree_bet_invalid_stake() {
+        let admin = @0x0;
+        let p1 = @0xF1;
+
+        let mut scenario = test_scenario::begin(admin);
+
+        scenario.initialize_contract_for_test(admin);
+
+        scenario.next_tx(p1);
+        let bet_id = {
+            let mut game_data = scenario.take_shared<GameData>();
+            let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
+            let clock = scenario.take_shared<Clock>();
+
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 11, 11, 1, coin, &clock, scenario.ctx());
+
+            test_scenario::return_shared(game_data);
+            test_scenario::return_shared(clock);
+            bet_id
+        };
+
+        scenario.end();
+    }
+
+    #[test]
+    #[expected_failure(abort_code = test_scenario::EObjectNotFound)]
+    fun test_agree_bet_deleted() {
         let admin = @0x0;
         let p1 = @0xF1;
 
@@ -244,14 +435,11 @@ module game::oracle_tests {
         let bet_id = {
             let mut game_data = scenario.take_shared<GameData>();
             let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
-            let mut clock = scenario.take_shared<Clock>();
+            let clock = scenario.take_shared<Clock>();
 
             let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, 1, coin, &clock, scenario.ctx());
-
-            clock.increment_for_testing(1);
-
-            test_scenario::return_shared(clock);
             test_scenario::return_shared(game_data);
+            test_scenario::return_shared(clock);
             bet_id
         };
 
@@ -264,6 +452,7 @@ module game::oracle_tests {
             test_scenario::return_shared(game_data);
         };
 
+        // Step 3: Try to accept the bet
         scenario.next_tx(p1);
         {
             let mut game_data = scenario.take_shared<GameData>();
@@ -272,9 +461,57 @@ module game::oracle_tests {
             let clock = scenario.take_shared<Clock>();
             
             betting::agree_to_bet(&mut game_data, &mut bet, coin, &clock, scenario.ctx());
+            
             test_scenario::return_shared(game_data);
-            test_scenario::return_shared(bet);
             test_scenario::return_shared(clock);
+            test_scenario::return_shared(bet);
+        };
+        
+        scenario.end();
+    }
+
+    #[test]
+    #[expected_failure(abort_code = test_scenario::EObjectNotFound)]
+    fun test_handle_expired_bet() {
+        let admin = @0x0;
+        let p1 = @0xF1;
+
+        let mut scenario = test_scenario::begin(admin);
+
+        scenario.initialize_contract_for_test(admin);
+
+        // Create the bet
+        scenario.next_tx(p1);
+        let bet_id = {
+            let mut game_data = scenario.take_shared<GameData>();
+            let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
+            let mut clock = scenario.take_shared<Clock>();
+
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, 1, coin, &clock, scenario.ctx());
+
+            clock.increment_for_testing(2);
+
+            test_scenario::return_shared(game_data);
+            test_scenario::return_shared(clock);
+            bet_id
+        };
+
+        scenario.next_tx(p1);
+        {
+            let mut game_data = scenario.take_shared<GameData>();
+            let clock = scenario.take_shared<Clock>();
+            let mut bet = scenario.take_shared_by_id<Bet>(bet_id);
+
+            betting::handle_expired_bet(&mut game_data, bet, &clock, scenario.ctx());
+
+            test_scenario::return_shared(game_data);
+            test_scenario::return_shared(clock);
+        };
+
+        scenario.next_tx(p1);
+        {
+            let bet = scenario.take_shared_by_id<Bet>(bet_id);
+            test_scenario::return_shared(bet);
         };
 
         scenario.end();

@@ -175,7 +175,7 @@ module game::betting {
     }
     
     // Make sure you cannot call from another module
-    entry fun requestValidate(game_data: &mut GameData, r: &Random, ctx: &mut TxContext): (ID, ID) {
+    entry fun requestValidate(game_data: &GameData, r: &Random, ctx: &mut TxContext): (ID, ID) {
         let mut i = 1;
         // You get five turns to try to find a suitable query.
         let mut turn = 0;
