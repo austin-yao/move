@@ -883,6 +883,46 @@ module game::oracle_tests {
         scenario.end();
     }
 
+    #[test]
+    fun test_multiple_bets() {
+        let admin = @0x0;
+        let p1 = @0xF1;
+        let p2 = @0xF2;
+
+        let prop1 = @0xB1;
+        let prop2 = @0xB2;
+        let prop3 = @0xB3;
+
+        let mut scenario = test_scenario::begin(admin);
+
+        scenario.initialize_contract_for_test(admin);
+        let bet_id_1 = scenario.create_and_accept_bet_for_test(p1, p2);
+        let bet_id_2 = scenario.create_and_accept_bet_for_test(p1, p2);
+
+        scenario.send_bet_to_oracle_for_test(bet_id_1, p1);
+        scenario.send_bet_to_oracle_for_test(bet_id_2, p1);
+
+        scenario.request_and_submit_proposal_for_test(prop1, true);
+        scenario.request_and_submit_proposal_for_test(prop1, true);
+        scenario.request_and_submit_proposal_for_test(prop2, true);
+        scenario.request_and_submit_proposal_for_test(prop2, false);
+        scenario.request_and_submit_proposal_for_test(prop3, true);
+        scenario.request_and_submit_proposal_for_test(prop3, false);
+
+        
+        scenario.next_tx(admin);
+        {
+            let p1_coin = scenario.take_from_address<Coin<SUI>>(p1);
+            let p2_coin = scenario.take_from_address<Coin<SUI>>(p2);
+            assert!(p1_coin.value() == 20, 1);
+            assert!(p2_coin.value() == 20, 2);
+            test_scenario::return_to_address(p1, p1_coin);
+            test_scenario::return_to_address(p2, p2_coin);
+        };
+
+        scenario.end();
+    }
+
     // ---------------------
     // Helpers
     // ---------------------
@@ -918,8 +958,9 @@ module game::oracle_tests {
             let mut game_data = scenario.take_shared<GameData>();
             let coin = coin::mint_for_testing<SUI>(10, scenario.ctx());
             let mut clock = scenario.take_shared<Clock>();
+            let time = clock.timestamp_ms();
 
-            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, 1, coin, &clock, scenario.ctx());
+            let bet_id = betting::create_bet(&mut game_data, b"Does this work?".to_string(), 10, 10, time + 1, coin, &clock, scenario.ctx());
 
             clock.increment_for_testing(1);
 
