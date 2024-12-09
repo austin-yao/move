@@ -2,9 +2,8 @@ import subprocess
 import json
 import sys
 
-GAS_BUDGET = "100000000"
 MY_ADDRESS = "0x7763265f11db8be13a63b8dc12da971da739704d818440e51ded4c8478424ed0"
-MODULE = "BetInstantiation2"
+MODULE = "betting"
 PACKAGE_ID = None
 INIT_ID = None
 COIN_ID = None
@@ -17,6 +16,7 @@ def run_command(command):
         print(f"Error running command: {command}")
         print(result.returncode)
         print(result.stderr)
+        print(result.stdout)
         sys.exit(1)
     print(result.stdout)
     return result.stdout
@@ -29,7 +29,7 @@ def main():
     
     # Step 1
     print("Step 1: Publishing module: ")
-    publish_command = f"sui client publish --gas-budget {GAS_BUDGET} --skip-dependency-verification --json"
+    publish_command = f"sui client publish --skip-dependency-verification --json"
     publish_output = run_command(publish_command)
     
     line_break()
@@ -68,7 +68,7 @@ def main():
     line_break()
         
     print("Step 3: Initializing Contract")
-    initialize_command = f"sui client ptb --gas-budget {GAS_BUDGET} --assign sender @{MY_ADDRESS} --move-call {PACKAGE_ID}::{MODULE}::initialize_contract @{INIT_ID} @{COIN_ID} --json"
+    initialize_command = f"sui client ptb --assign sender @{MY_ADDRESS} --move-call {PACKAGE_ID}::{MODULE}::initialize_contract @{INIT_ID} @{COIN_ID} --json"
     initialize_output = run_command(initialize_command)
     try:
         initialize_json = json.loads(initialize_output)
@@ -95,9 +95,9 @@ def main():
     
     line_break()
     
-    print("Step 4: Creating a Bet")
-    create_command = f"sui client ptb --gas-budget {GAS_BUDGET} --assign sender @{MY_ADDRESS} --move-call {PACKAGE_ID}::{MODULE}::create_bet @{GAME_ID} @{MY_ADDRESS} \"\'Does this work\'\" 50 50 1 1233333 @{COIN_ID} --json"
-    create_output = run_command(create_command)
+    # print("Step 4: Creating a Bet")
+    # create_command = f"sui client ptb --gas-budget {GAS_BUDGET} --assign sender @{MY_ADDRESS} --move-call {PACKAGE_ID}::{MODULE}::create_bet @{GAME_ID} @{MY_ADDRESS} \"\'Does this work\'\" 50 50 1 1233333 @{COIN_ID} --json"
+    # create_output = run_command(create_command)
     
     line_break()
 

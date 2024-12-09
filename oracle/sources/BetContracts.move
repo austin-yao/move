@@ -89,20 +89,31 @@ module game::betting {
 
     // For Emitting Events
     public struct BetCreated has copy, drop {
-        bet: ID
+        bet_id: ID,
+        creator: address,
+        question: String,
+        for_amount: u64,
+        against_amount: u64,
+        agreed_by_both: bool,
+        game_start_time: u64,
+        game_end_time: u64,
+        active: bool
     }
 
     public struct BetDeleted has copy, drop {
-        bet: ID
+        bet_id: ID,
+        deleter: address
     }
 
     public struct BetAccepted has copy, drop {
-        bet: ID
+        bet_id: ID,
+        acceptor: address
     }
 
     public struct BetPaidOut has copy, drop {
-        bet: ID,
-        decision: bool
+        bet_id: ID,
+        amount: u64,
+        winner: address
     }
 
     // Contract Functions
@@ -352,7 +363,15 @@ module game::betting {
         transfer::share_object(new_bet);
 
         event::emit(BetCreated {
-            bet: bet_id
+            bet_id,
+            creator: creator_address,
+            question,
+            for_amount: amount,
+            against_amount,
+            agreed_by_both: false,
+            game_start_time: current_time,
+            game_end_time,
+            active: true,
         });
 
         return bet_id
@@ -387,7 +406,8 @@ module game::betting {
         
         stake.destroy_zero();
         event::emit(BetDeleted {
-            bet: id.to_inner()
+            bet_id: id.to_inner(),
+            deleter: ctx.sender()
         });
 
         object::delete(id);
@@ -412,7 +432,8 @@ module game::betting {
         bet.consenting_address = ctx.sender();
 
         event::emit(BetAccepted {
-            bet: bet.bet_id
+            bet_id: bet.bet_id,
+            acceptor: ctx.sender()
         });
     }
 
@@ -443,7 +464,8 @@ module game::betting {
         } = bet;
         
         event::emit(BetDeleted {
-            bet: id.to_inner()
+            bet_id: id.to_inner(),
+            deleter: ctx.sender()
         });
 
         stake.destroy_zero();
@@ -471,8 +493,9 @@ module game::betting {
         bet.is_active = false;
 
         event::emit(BetPaidOut {
-            bet: bet.bet_id,
-            decision: oracle_answer
+            bet_id: bet.bet_id,
+            winner: winner_address,
+            amount: bet.for_amount + bet.against_amount
         });
     }
 
@@ -527,6 +550,10 @@ module game::betting {
 
     public fun query_id(prop: &Proposal): ID {
         prop.query_id
+    }
+
+    public fun test(game_id: &GameData) {
+        
     }
 
     // Helpers for testing

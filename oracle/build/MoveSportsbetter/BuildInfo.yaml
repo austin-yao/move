@@ -5,14 +5,14 @@ compiled_package_info:
     game: "0000000000000000000000000000000000000000000000000000000000000000"
     std: "0000000000000000000000000000000000000000000000000000000000000001"
     sui: "0000000000000000000000000000000000000000000000000000000000000002"
-  source_digest: 9DE97A93C81D8813815FE9CF6F0C8E2603DB61570EF591454A32BEE04944DB3D
+  source_digest: 235BE0B53849106FE464B8867467AB9F8EC39D30390A53262B23064A628218AC
   build_flags:
-    dev_mode: true
-    test_mode: true
+    dev_mode: false
+    test_mode: false
     generate_docs: false
     install_dir: ~
     force_recompilation: false
-    lock_file: ~
+    lock_file: "./Move.lock"
     fetch_deps_only: false
     skip_fetch_latest_git_deps: false
     default_flavor: sui
