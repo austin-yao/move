@@ -5,7 +5,6 @@ module game::betting {
     use sui::sui::SUI;
     use sui::balance::{Self, Balance};
     use sui::vec_map::{Self, VecMap};
-    use sui::bag::{Self, Bag};
     use sui::table::{Self, Table};
     use sui::object_table::{Self, ObjectTable};
     use sui::table_vec::{Self, TableVec};
@@ -27,12 +26,6 @@ module game::betting {
 
     const VAL_SIZE: u64 = 3;
 
-    // public struct ApprovedUsers has key, store {
-    //     id: UID,
-    //     owner: address,
-    //     users: vector<address>,
-    // }
-
     public struct InitializationCap has key, store {
         id: UID,
     }
@@ -41,7 +34,6 @@ module game::betting {
         id: UID,
         owner: address,
         funds: Balance<SUI>,
-        approved_users: Bag,
         all_queries: ObjectTable<ID, Query>,
         query_count: u64,
         num_to_query: Table<u64, ID>,
@@ -63,7 +55,9 @@ module game::betting {
         game_start_time: u64,
         game_end_time: u64,
         is_active: bool,
-        stake: Balance<SUI>
+        stake: Balance<SUI>,
+        create_time: u64,
+        sent_to_oracle: bool
     }
 
     public struct Proposal has store, key {
@@ -116,6 +110,10 @@ module game::betting {
         winner: address
     }
 
+    public struct BetSentToOracle has copy, drop {
+        bet_id: ID
+    }
+
     // Contract Functions
 
     // Called on contract initialization. Gives InitializationCap to caller.
@@ -133,7 +131,6 @@ module game::betting {
             id: object::new(ctx),
             owner: tx_context::sender(ctx),
             funds: coin::into_balance(coin),
-            approved_users: bag::new(ctx),
             all_queries: object_table::new<ID, Query>(ctx),
             query_count: 0,
             num_to_query: table::new<u64, ID>(ctx),
@@ -247,7 +244,7 @@ module game::betting {
         assert!(game_data.all_queries.contains(prop.query_id), EQueryNotFound);
         assert!(prop.oracleId == bet.bet_id, EInvalidProposalForBet);
 
-        let mut query = game_data.all_queries.borrow_mut(prop.query_id);
+        let query = game_data.all_queries.borrow_mut(prop.query_id);
 
         // check that the sender hasn't already validated this one
         assert!(!query.validators.contains(&sender), EValidationError);
@@ -308,9 +305,9 @@ module game::betting {
             
             // process the oracle answer.
             if (num_in_favor > majority) {
-                process_oracle_answer(game_data, bet, true, ctx);
+                process_oracle_answer(bet, true, ctx);
             } else {
-                process_oracle_answer(game_data, bet, false, ctx);
+                process_oracle_answer( bet, false, ctx);
             };
 
             balance.destroy_zero();
@@ -326,7 +323,7 @@ module game::betting {
     // END AUSTIN
 
     //create a new Bet object
-    public fun create_bet(game_data: &mut GameData,
+    public fun create_bet(
         question: String, amount: u64,
         against_amount: u64, game_end_time: u64, user_bet: Coin<SUI>, clock: &Clock, ctx: &mut TxContext
     ): ID {
@@ -357,7 +354,9 @@ module game::betting {
             game_start_time: current_time,
             game_end_time,
             is_active: true, // Bet is active but not yet agreed upon
-            stake: amount_staked
+            stake: amount_staked,
+            create_time: current_time,
+            sent_to_oracle: false
         };
 
         transfer::share_object(new_bet);
@@ -378,7 +377,7 @@ module game::betting {
     }
     
     // delete a bet if it;s not agreed upon
-    public fun delete_bet(game_data: &mut GameData, mut bet: Bet, ctx: &mut TxContext) {
+    public fun delete_bet(mut bet: Bet, ctx: &mut TxContext) {
         assert!(bet.creator_address == ctx.sender(), ENotBetOwner);
         assert!(!bet.agreed_by_both, EBetAlreadyInProgress);
 
@@ -401,7 +400,9 @@ module game::betting {
             game_start_time: _,
             game_end_time: _,
             is_active: _,
-            stake
+            stake,
+            create_time : _,
+            sent_to_oracle: _
         } = bet;
         
         stake.destroy_zero();
@@ -414,7 +415,7 @@ module game::betting {
     }
 
     //second player in instantiated bet agrees to it here
-    public fun agree_to_bet(game_data: &mut GameData, bet: &mut Bet, coin: Coin<SUI>, clock: &Clock, ctx: &mut TxContext) {
+    public fun agree_to_bet(bet: &mut Bet, coin: Coin<SUI>, clock: &Clock, ctx: &mut TxContext) {
         let current_time = clock.timestamp_ms();
 
         //caller is consenting address and bet is not already agreed to
@@ -438,7 +439,7 @@ module game::betting {
     }
 
     // handle expiration of a bet agreement window
-    public fun handle_expired_bet(game_data: &mut GameData, mut bet: Bet, clock: &Clock, ctx: &mut TxContext) {
+    public fun handle_expired_bet(mut bet: Bet, clock: &Clock, ctx: &mut TxContext) {
         let current_time = clock.timestamp_ms();
 
         assert!(bet.is_active, EBetNoLongerActive);
@@ -460,7 +461,9 @@ module game::betting {
             game_start_time: _,
             game_end_time: _,
             is_active: _,
-            stake
+            stake,
+            create_time: _,
+            sent_to_oracle: _
         } = bet;
         
         event::emit(BetDeleted {
@@ -481,11 +484,15 @@ module game::betting {
         let current_time = clock.timestamp_ms();
         assert!(current_time > bet.game_end_time, EBetNotYetInProgress);
 
+        bet.sent_to_oracle = true;
         receiveQuery(game_data, bet, ctx);
+        event::emit(BetSentToOracle {
+            bet_id: bet.bet_id
+        });
     }
 
     //after oracle finished, get the winner and perform payout
-    fun process_oracle_answer(game_data: &mut GameData, bet: &mut Bet, oracle_answer: bool, ctx: &mut TxContext) {
+    fun process_oracle_answer(bet: &mut Bet, oracle_answer: bool, ctx: &mut TxContext) {
         let winner_address = if (oracle_answer) { bet.creator_address } else { bet.consenting_address };
         let payout = coin::take<SUI>(&mut bet.stake, bet.for_amount + bet.against_amount, ctx);
         transfer::public_transfer(payout, winner_address);
@@ -550,10 +557,6 @@ module game::betting {
 
     public fun query_id(prop: &Proposal): ID {
         prop.query_id
-    }
-
-    public fun test(game_id: &GameData) {
-        
     }
 
     // Helpers for testing
