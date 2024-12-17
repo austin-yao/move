@@ -54,7 +54,8 @@ module game::betting {
         //ex: Eagles defeat Seahawks means instantiator is on Eagles win side
         game_start_time: u64,
         game_end_time: u64,
-        is_active: bool,
+        // 1 is active, 2 is deleted, 3 is paid out, 4 is expired
+        status: u8,
         stake: Balance<SUI>,
         create_time: u64,
         sent_to_oracle: bool
@@ -91,7 +92,7 @@ module game::betting {
         agreed_by_both: bool,
         game_start_time: u64,
         game_end_time: u64,
-        active: bool
+        status: u8
     }
 
     public struct BetDeleted has copy, drop {
@@ -111,6 +112,10 @@ module game::betting {
     }
 
     public struct BetSentToOracle has copy, drop {
+        bet_id: ID
+    }
+
+    public struct BetExpired has copy, drop {
         bet_id: ID
     }
 
@@ -239,7 +244,7 @@ module game::betting {
         let prop_query_id = prop.query_id;
 
         // check that the bet and query exist
-        assert!(bet.is_active, EBetNoLongerActive);
+        assert!(bet.status == 1, EBetNoLongerActive);
         assert!(bet.agreed_by_both, EBetNotYetInProgress);
         assert!(game_data.all_queries.contains(prop.query_id), EQueryNotFound);
         assert!(prop.oracleId == bet.bet_id, EInvalidProposalForBet);
@@ -353,7 +358,7 @@ module game::betting {
             agreed_by_both: false, // Initially false until second party agrees
             game_start_time: current_time,
             game_end_time,
-            is_active: true, // Bet is active but not yet agreed upon
+            status: 1, // Bet is active but not yet agreed upon
             stake: amount_staked,
             create_time: current_time,
             sent_to_oracle: false
@@ -370,7 +375,7 @@ module game::betting {
             agreed_by_both: false,
             game_start_time: current_time,
             game_end_time,
-            active: true,
+            status: 1,
         });
 
         return bet_id
@@ -387,7 +392,7 @@ module game::betting {
         transfer::public_transfer(payout, bet.creator_address);
 
         // Remove bet
-        bet.is_active = false;
+        bet.status = 2;
         let Bet {
             id,
             creator_address: _,
@@ -399,7 +404,7 @@ module game::betting {
             agreed_by_both: _,
             game_start_time: _,
             game_end_time: _,
-            is_active: _,
+            status: _,
             stake,
             create_time : _,
             sent_to_oracle: _
@@ -421,7 +426,7 @@ module game::betting {
         //caller is consenting address and bet is not already agreed to
         assert!(bet.creator_address != ctx.sender(), ENotBetOwner); 
         assert!(!bet.agreed_by_both, EBetAlreadyInProgress); 
-        assert!(bet.is_active, EBetNoLongerActive); 
+        assert!(bet.status == 1, EBetNoLongerActive); 
         assert!(current_time <= bet.game_end_time, EBetNoLongerActive); 
 
         assert!(coin.value() == bet.against_amount, EInvalidStakeSize);
@@ -442,13 +447,13 @@ module game::betting {
     public fun handle_expired_bet(mut bet: Bet, clock: &Clock, ctx: &mut TxContext) {
         let current_time = clock.timestamp_ms();
 
-        assert!(bet.is_active, EBetNoLongerActive);
+        assert!(bet.status == 1, EBetNoLongerActive);
         assert!(current_time > bet.game_end_time && !bet.agreed_by_both, EBetAlreadyInProgress);
 
         let payout_amount = bet.for_amount;
         let payout = coin::take<SUI>(&mut bet.stake, payout_amount, ctx);
         transfer::public_transfer(payout, bet.creator_address);
-        bet.is_active = false;
+        bet.status = 4;
         let Bet {
             id,
             creator_address: _,
@@ -460,15 +465,14 @@ module game::betting {
             agreed_by_both: _,
             game_start_time: _,
             game_end_time: _,
-            is_active: _,
+            status: _,
             stake,
             create_time: _,
             sent_to_oracle: _
         } = bet;
         
-        event::emit(BetDeleted {
-            bet_id: id.to_inner(),
-            deleter: ctx.sender()
+        event::emit(BetExpired {
+            bet_id: id.to_inner()
         });
 
         stake.destroy_zero();
@@ -478,7 +482,7 @@ module game::betting {
 
     //after game end time, send bet to oracle for winner verification
     public fun send_bet_to_oracle(game_data: &mut GameData, bet: &mut Bet, clock: &Clock, ctx: &mut TxContext) {
-        assert!(bet.is_active, EBetNoLongerActive);
+        assert!(bet.status == 1, EBetNoLongerActive);
         assert!(bet.agreed_by_both, EBetNotYetInProgress);
 
         let current_time = clock.timestamp_ms();
@@ -497,7 +501,7 @@ module game::betting {
         let payout = coin::take<SUI>(&mut bet.stake, bet.for_amount + bet.against_amount, ctx);
         transfer::public_transfer(payout, winner_address);
 
-        bet.is_active = false;
+        bet.status = 3;
 
         event::emit(BetPaidOut {
             bet_id: bet.bet_id,
@@ -532,7 +536,7 @@ module game::betting {
     }
 
     public fun active(bet: &Bet): bool {
-        bet.is_active
+        bet.status == 1
     }
 
     public fun id(prop: &Proposal): ID {
